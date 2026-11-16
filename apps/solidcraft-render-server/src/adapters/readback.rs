@@ -1,12 +1,15 @@
-//! The painted texture back on the CPU as tight RGBA rows: one copy into a reused `MAP_READ`
-//! buffer with rows padded to 256 bytes (as `vendor/egui-wgpu/src/capture.rs:122-190` and
-//! `crates/viewport-gpu/src/capture.rs:299-337` do), then a blocking wait. Synchronous on purpose
-//! in v1 (lowest latency for one frame); a pipelined ring is an M3 option.
+//! The painted texture back on the CPU: one copy into a reused `MAP_READ` buffer with rows padded
+//! to 256 bytes (as `vendor/egui-wgpu/src/capture.rs:122-190` and
+//! `crates/viewport-gpu/src/capture.rs:299-337` do), a blocking wait, and the mapped rows handed
+//! to the caller as they are: the frame stream compares and copies straight from them, so no
+//! second full frame is kept on the CPU. Synchronous on purpose (lowest latency for one frame).
 
 use std::sync::mpsc;
 use std::time::Duration;
 
 use egui_wgpu::wgpu;
+
+use crate::domain::damage::Pixels;
 
 /// Longest wait for the GPU to finish a frame before calling the device stuck.
 const WAIT: Duration = Duration::from_secs(5);
@@ -17,12 +20,20 @@ pub struct Readback {
 }
 
 impl Readback {
-    /// Copy `texture` (`size` device px, Rgba8Unorm or Bgra8Unorm) into `out` as tight RGBA rows.
-    pub fn read(&mut self, rs: &egui_wgpu::RenderState, texture: &wgpu::Texture, size: [u32; 2], out: &mut Vec<u8>) -> Result<(), String> {
+    /// Copy `texture` (`size` device px, `Rgba8Unorm`) into the buffer, wait for it, and run `f`
+    /// on the mapped rows (RGBA, rows `stride` bytes apart).
+    pub fn with_mapped<R>(
+        &mut self,
+        rs: &egui_wgpu::RenderState,
+        texture: &wgpu::Texture,
+        size: [u32; 2],
+        f: impl FnOnce(Pixels<'_>) -> R,
+    ) -> Result<R, String> {
         let [w, h] = size;
-        let row = w * 4;
-        let padded = row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         if self.buffer.as_ref().is_none_or(|(_, s, _)| *s != size) {
+            // The old one goes before the new one is made.
+            self.buffer = None;
             let buffer = rs.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("render-server readback"),
                 size: u64::from(padded) * u64::from(h),
@@ -31,8 +42,7 @@ impl Readback {
             });
             self.buffer = Some((buffer, size, padded));
         }
-        let Some((buffer, _, padded)) = self.buffer.as_ref() else { return Err("no readback buffer".into()) };
-        let padded = *padded;
+        let Some((buffer, _, _)) = self.buffer.as_ref() else { return Err("no readback buffer".into()) };
         let mut encoder = rs.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("render-server readback") });
         encoder.copy_texture_to_buffer(
             texture.as_image_copy(),
@@ -62,25 +72,18 @@ impl Readback {
             Ok(Err(e)) => return Err(format!("mapping the frame: {e}")),
             Err(_) => return Err("the frame was never mapped".into()),
         }
-        let copied = {
+        let out = {
             // `buffer.rs:620`: a `Result` in wgpu 30.
             let data = slice.get_mapped_range().map_err(|e| format!("reading the frame: {e}"))?;
-            out.clear();
-            out.reserve(row as usize * h as usize);
-            for r in data.chunks(padded as usize).take(h as usize) {
-                out.extend_from_slice(r.get(..row as usize).unwrap_or_default());
-            }
-            out.len() == row as usize * h as usize
+            let pixels = Pixels { data: &data[..], stride: padded as usize, w, h };
+            pixels.is_whole().then(|| f(pixels))
         };
         buffer.unmap();
-        if !copied {
-            return Err("the frame read back short".into());
-        }
-        if texture.format() == wgpu::TextureFormat::Bgra8Unorm {
-            for px in out.as_chunks_mut::<4>().0 {
-                px.swap(0, 2);
-            }
-        }
-        Ok(())
+        out.ok_or_else(|| "the frame read back short".to_string())
+    }
+
+    /// The texture as tight RGBA rows in `out`.
+    pub fn read(&mut self, rs: &egui_wgpu::RenderState, texture: &wgpu::Texture, size: [u32; 2], out: &mut Vec<u8>) -> Result<(), String> {
+        self.with_mapped(rs, texture, size, |pixels| pixels.copy_tight(out))
     }
 }

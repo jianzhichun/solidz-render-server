@@ -52,14 +52,20 @@ token to the `solidcraft-cli mcp --connect` bridge). The render server writes **
 `solidcraft-cli mcp`, nor take the desktop app's place.
 
 M1 mode, no host: `--snapshot DIR --frames N [--open FILE] [--size WxH] [--dpr N]` draws N frames,
-writes `DIR/frame-0001.png` … and `DIR/frames.json` (each frame's `timing`, the adapter, the samples),
+writes `DIR/frame-0001.png` … and `DIR/frames.json` (each frame's `timing`, the adapter, the samples,
+and `gpuMemory`: what the device holds by label where the backend can say, Vulkan and D3D12),
 and exits 0. It also opens the control channel and prints `control 127.0.0.1:PORT` on stderr, so M1
 and M2 scripts can ask `ui.handles`, `ui.worldToScreen`, `document.revision`.
 
+The scene's MSAA is chosen once, at start, from `--dpr`: 1 sample at dpr ≥ 2, else 2 where the
+device has them (else 1); a later `resize` to another dpr keeps it (`ready.samples` says what is in
+effect). The frame is JPEG-encoded while it moves, and 4× targets were most of the device's memory.
+
 Local measurement flags, never passed by the host (SPIKE.md): `--adapter auto|hardware|software`
-(either mode), and in M1 mode `--script FILE` (wire `InputEvent`s at given frames), `--hold-ms N`
-(keep answering the control channel after the last frame), `--gap-ms N` (between frames); with no
-`SOLIDCRAFT_CONTROL_TOKEN` M1 mode makes a token and prints it as `control-token …`.
+and `--msaa auto|1|2|4` (either mode), and in M1 mode `--script FILE` (wire `InputEvent`s at given
+frames), `--hold-ms N` (keep answering the control channel after the last frame), `--gap-ms N`
+(between frames); with no `SOLIDCRAFT_CONTROL_TOKEN` M1 mode makes a token and prints it as
+`control-token …`.
 
 Sequence:
 

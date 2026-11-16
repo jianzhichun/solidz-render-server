@@ -1,5 +1,7 @@
 //! What changed between the last frame sent and this one: tiles of [`TILE`]² device pixels
-//! compared byte for byte (egui reports no damage regions), merged into few rectangles.
+//! compared byte for byte (egui reports no damage regions), merged into few rectangles. The new
+//! frame is compared where it was read back ([`Pixels`], rows padded), and only what changed is
+//! copied into the last frame sent.
 
 /// Tile side, device pixels.
 pub const TILE: u32 = 64;
@@ -26,6 +28,53 @@ impl Rect {
     }
 }
 
+/// A frame's RGBA rows as read back: `w`×`h` pixels, rows `stride` bytes apart.
+#[derive(Clone, Copy)]
+pub struct Pixels<'a> {
+    pub data: &'a [u8],
+    pub stride: usize,
+    pub w: u32,
+    pub h: u32,
+}
+
+impl Pixels<'_> {
+    /// Every row is there.
+    pub fn is_whole(&self) -> bool {
+        self.h == 0 || self.data.len() >= self.stride * (self.h as usize - 1) + self.w as usize * 4
+    }
+
+    /// Row `y`'s pixels (empty past the end).
+    pub fn row(&self, y: u32) -> &[u8] {
+        let start = y as usize * self.stride;
+        self.data.get(start..start + self.w as usize * 4).unwrap_or_default()
+    }
+
+    /// As tight rows in `out`.
+    pub fn copy_tight(&self, out: &mut Vec<u8>) {
+        out.clear();
+        out.reserve(self.w as usize * self.h as usize * 4);
+        for y in 0..self.h {
+            out.extend_from_slice(self.row(y));
+        }
+    }
+
+    /// `rects` of these pixels into `dst`, a frame of the same size in tight rows (made that
+    /// size, zeroed, if it is not).
+    pub fn copy_rects(&self, dst: &mut Vec<u8>, rects: &[Rect]) {
+        let tight = self.w as usize * 4;
+        dst.resize(tight * self.h as usize, 0);
+        for r in rects {
+            let (a, b) = (r.x as usize * 4, (r.x + r.w) as usize * 4);
+            for y in r.y..r.y + r.h {
+                let start = y as usize * tight;
+                if let (Some(to), Some(from)) = (dst.get_mut(start + a..start + b), self.row(y).get(a..b)) {
+                    to.copy_from_slice(from);
+                }
+            }
+        }
+    }
+}
+
 /// The tile grid of a `w`×`h` frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Grid {
@@ -42,18 +91,19 @@ impl Grid {
         self.h.div_ceil(TILE)
     }
 
-    /// Which tiles of tile row `ty` differ between `prev` and `next` (tight RGBA rows). The
+    /// Which tiles of tile row `ty` differ between `prev` (tight RGBA rows) and `next`. The
     /// caller may compare the rows in parallel.
-    pub fn row_changes(&self, prev: &[u8], next: &[u8], ty: u32) -> Vec<bool> {
+    pub fn row_changes(&self, prev: &[u8], next: Pixels<'_>, ty: u32) -> Vec<bool> {
         let stride = self.w as usize * 4;
         let mut dirty = vec![false; self.tiles_x() as usize];
         let (y0, y1) = (ty * TILE, ((ty + 1) * TILE).min(self.h));
         for y in y0..y1 {
-            let row = y as usize * stride;
+            let old = prev.get(y as usize * stride..(y as usize + 1) * stride).unwrap_or_default();
+            let new = next.row(y);
             for (tx, d) in dirty.iter_mut().enumerate().filter(|(_, d)| !**d) {
-                let a = row + tx * TILE as usize * 4;
-                let b = (row + (tx + 1) * TILE as usize * 4).min(row + stride);
-                *d = prev.get(a..b) != next.get(a..b);
+                let a = tx * TILE as usize * 4;
+                let b = ((tx + 1) * TILE as usize * 4).min(stride);
+                *d = old.get(a..b) != new.get(a..b);
             }
         }
         dirty
@@ -124,6 +174,7 @@ mod tests {
     use super::*;
 
     fn changes(grid: Grid, prev: &[u8], next: &[u8]) -> Vec<Rect> {
+        let next = Pixels { data: next, stride: grid.w as usize * 4, w: grid.w, h: grid.h };
         let rows: Vec<Vec<bool>> = (0..grid.tiles_y()).map(|ty| grid.row_changes(prev, next, ty)).collect();
         grid.rects(&rows)
     }
@@ -173,5 +224,28 @@ mod tests {
             }
         }
         assert_eq!(changes(grid, &prev, &next), vec![grid.full()]);
+    }
+
+    /// Read-back rows are padded: compared and copied by row, the padding never counts, and
+    /// after copying what changed the last frame sent equals the new one.
+    #[test]
+    fn padded_rows_compare_and_copy_by_row() {
+        let grid = Grid { w: 100, h: 70 };
+        let stride = 512;
+        let mut padded = vec![0xeeu8; stride * 70];
+        for y in 0..70 {
+            padded[y * stride..y * stride + 400].fill(0);
+        }
+        padded[69 * stride + 99 * 4] = 9;
+        let next = Pixels { data: &padded, stride, w: 100, h: 70 };
+        let mut sent = vec![0u8; 100 * 70 * 4];
+        let rows: Vec<Vec<bool>> = (0..grid.tiles_y()).map(|ty| grid.row_changes(&sent, next, ty)).collect();
+        let rects = grid.rects(&rows);
+        assert_eq!(rects, vec![Rect { x: 64, y: 64, w: 36, h: 6 }]);
+        next.copy_rects(&mut sent, &rects);
+        let mut tight = Vec::new();
+        next.copy_tight(&mut tight);
+        assert_eq!(sent, tight);
+        assert!(!Pixels { data: &padded[..stride * 69], stride, w: 100, h: 70 }.is_whole());
     }
 }

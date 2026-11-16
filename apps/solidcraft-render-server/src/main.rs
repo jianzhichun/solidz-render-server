@@ -41,9 +41,9 @@ fn main() {
     let ui = UiOptions { lang: options.lang, dark: options.dark };
     let size = FrameSize::new(options.css.0, options.css.1, options.dpr);
     let code = match options.mode {
-        Mode::Stream(addr) => stream::run(StreamArgs { addr, ui, size, adapter: options.adapter }),
+        Mode::Stream(addr) => stream::run(StreamArgs { addr, ui, size, adapter: options.adapter, msaa: options.msaa }),
         Mode::Snapshot { dir, frames, open, script, hold, gap } => {
-            snapshot::run(SnapshotArgs { dir, frames, open, script, hold, gap, ui, size, adapter: options.adapter })
+            snapshot::run(SnapshotArgs { dir, frames, open, script, hold, gap, ui, size, adapter: options.adapter, msaa: options.msaa })
         }
     };
     std::process::exit(code);

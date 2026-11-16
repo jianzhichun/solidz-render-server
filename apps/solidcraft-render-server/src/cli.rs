@@ -7,9 +7,11 @@ use std::time::Duration;
 
 use solidcraft_viewport_gpu::select::Policy;
 
+use crate::domain::samples::Msaa;
+
 pub const USAGE: &str = "usage:
-  solidcraft-render-server --stream 127.0.0.1:PORT [--session ID] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light] [--adapter auto|hardware|software]
-  solidcraft-render-server --snapshot DIR --frames N [--open FILE] [--script FILE] [--hold-ms N] [--gap-ms N] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light] [--adapter ...]
+  solidcraft-render-server --stream 127.0.0.1:PORT [--session ID] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light] [--adapter auto|hardware|software] [--msaa auto|1|2|4]
+  solidcraft-render-server --snapshot DIR --frames N [--open FILE] [--script FILE] [--hold-ms N] [--gap-ms N] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light] [--adapter ...] [--msaa ...]
 environment: SOLIDCRAFT_RENDER_TOKEN and SOLIDCRAFT_CONTROL_TOKEN (64 hex each; stream mode), SOLIDCRAFT_RENDER_LOG=error|warn|info|debug";
 
 #[derive(Debug, PartialEq)]
@@ -31,6 +33,8 @@ pub struct Options {
     pub lang: String,
     pub dark: bool,
     pub adapter: Policy,
+    /// The scene's samples (`domain::samples`).
+    pub msaa: Msaa,
 }
 
 #[derive(Debug, PartialEq)]
@@ -52,6 +56,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> {
         lang: "zh".into(),
         dark: true,
         adapter: Policy::Auto,
+        msaa: Msaa::Auto,
     };
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -81,6 +86,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> {
                     .filter(|p| *p != Policy::Cpu)
                     .ok_or("--adapter: auto, hardware or software (the UI needs a GPU device)")?
             }
+            "--msaa" => o.msaa = Msaa::parse(&value()?).ok_or("--msaa: auto, 1, 2, 4 or 8")?,
             "--snapshot" => snapshot = Some(PathBuf::from(value()?)),
             "--frames" => frames = Some(value()?.parse::<u32>().ok().filter(|n| *n > 0).ok_or("--frames: a positive count")?),
             "--open" => open = Some(PathBuf::from(value()?)),
@@ -125,7 +131,9 @@ mod tests {
     fn the_hosts_command_line() {
         let o = run("--stream 127.0.0.1:4100 --session s1 --size 1280x800 --dpr 2 --lang zh --theme light").unwrap();
         assert_eq!(o.mode, Mode::Stream("127.0.0.1:4100".parse().unwrap()));
-        assert_eq!((o.css, o.dpr, o.dark, o.session.as_deref()), ((1280, 800), 2.0, false, Some("s1")));
+        assert_eq!((o.css, o.dpr, o.dark, o.session.as_deref(), o.msaa), ((1280, 800), 2.0, false, Some("s1"), Msaa::Auto));
+        assert_eq!(run("--stream 127.0.0.1:1 --msaa 4").unwrap().msaa, Msaa::Samples(4));
+        assert!(run("--stream 127.0.0.1:1 --msaa 3").is_err());
     }
 
     #[test]

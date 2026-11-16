@@ -160,9 +160,14 @@ pub fn with_cjk_fallback(fonts: egui::FontDefinitions, bytes: Vec<u8>) -> Option
 
 /// `fonts` with `bytes` appended under `name` as the last fallback of every interface
 /// family. `None` when the bytes are not a font.
-fn with_fallback(mut fonts: egui::FontDefinitions, name: &str, bytes: Vec<u8>) -> Option<egui::FontDefinitions> {
-    ttf_parser::Face::parse(&bytes, 0).ok()?;
-    fonts.font_data.insert(name.to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
+fn with_fallback(fonts: egui::FontDefinitions, name: &str, bytes: Vec<u8>) -> Option<egui::FontDefinitions> {
+    with_shared_fallback(fonts, name, Arc::new(bytes))
+}
+
+/// [`with_fallback`] with bytes already shared: every installation uses that one copy.
+fn with_shared_fallback(mut fonts: egui::FontDefinitions, name: &str, bytes: egui::epaint::text::Blob) -> Option<egui::FontDefinitions> {
+    ttf_parser::Face::parse((*bytes).as_ref(), 0).ok()?;
+    fonts.font_data.insert(name.to_owned(), Arc::new(egui::FontData::from_blob(bytes, 0)));
     for family in all_families() {
         let list = fonts.families.entry(family).or_default();
         list.retain(|entry| entry != name);
@@ -634,15 +639,16 @@ pub fn setup_fonts_for(ctx: &egui::Context, language: &str, ui_font: &str) {
 
 /// The system fallback faces, searched for once and kept: reading them takes long on a system
 /// with large CJK fonts, so the app starts that search on a thread and draws its first frame
-/// with the bundled faces (see [`load_system_fonts_in_background`]).
+/// with the bundled faces (see [`load_system_fonts_in_background`]). Shared with the installed
+/// fonts, not copied into them: these files can be tens of megabytes each.
 #[cfg(not(target_arch = "wasm32"))]
 struct SystemFonts {
-    cjk: Option<Vec<u8>>,
-    chinese: Option<Vec<u8>>,
-    hangul: Option<Vec<u8>>,
-    thai: Option<Vec<u8>>,
-    hebrew: Option<Vec<u8>>,
-    arabic: Option<Vec<u8>>,
+    cjk: Option<egui::epaint::text::Blob>,
+    chinese: Option<egui::epaint::text::Blob>,
+    hangul: Option<egui::epaint::text::Blob>,
+    thai: Option<egui::epaint::text::Blob>,
+    hebrew: Option<egui::epaint::text::Blob>,
+    arabic: Option<egui::epaint::text::Blob>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -657,7 +663,15 @@ fn system_fallbacks() -> &'static SystemFonts {
         let thai = THAI_FONT_CANDIDATES.iter().find_map(|path| try_read_font(std::path::Path::new(path)));
         let hebrew = HEBREW_FONT_CANDIDATES.iter().find_map(|path| try_read_font(std::path::Path::new(path)).filter(|bytes| covers(bytes, 'א')));
         let arabic = arabic_font();
-        SystemFonts { cjk, chinese, hangul, thai, hebrew, arabic }
+        let shared = |bytes: Option<Vec<u8>>| bytes.map(|b| -> egui::epaint::text::Blob { Arc::new(b) });
+        SystemFonts {
+            cjk: shared(cjk),
+            chinese: shared(chinese),
+            hangul: shared(hangul),
+            thai: shared(thai),
+            hebrew: shared(hebrew),
+            arabic: shared(arabic),
+        }
     })
 }
 
@@ -717,7 +731,7 @@ fn install_fonts(ctx: &egui::Context, language: &str, ui_font: &str, system: Opt
             _ => arabic.clone(),
         };
         if let Some(bytes) = bytes
-            && let Some(with_fallback) = with_fallback(fonts.clone(), name, bytes)
+            && let Some(with_fallback) = with_shared_fallback(fonts.clone(), name, bytes)
         {
             fonts = with_fallback;
         }

@@ -15,11 +15,12 @@ listed at the end.
 | Path | What |
 |---|---|
 | `src/main.rs`, `src/cli.rs` | composition root, flags |
-| `src/domain/` | no I/O, no GPU, unit-tested: `wire` (messages), `envelope` (framing), `input` (wire event → `egui::Event`, IME included), `geometry` (CSS px → device px, 4096 cap), `damage` (64² tiles → rectangles), `codec` (raw / JPEG stripes / PNG), `pacing` (credits, 60 passes/s, on demand) |
-| `src/adapters/` | `gpu` (headless device + `RenderState`), `painter` (one frame into the offscreen texture, egui-wgpu's own call order), `readback`, `encode` (JPEG/PNG with `image`, parallel with rayon), `link` (leg A: reader/writer threads), `control` (upstream's control server, no token or discovery files), `clipboard` (arboard), `logging` |
+| `src/domain/` | no I/O, no GPU, unit-tested: `wire` (messages), `envelope` (framing), `input` (wire event → `egui::Event`, IME included), `geometry` (CSS px → device px, 4096 cap), `damage` (64² tiles → rectangles), `codec` (raw / JPEG stripes / PNG), `pacing` (credits, 60 passes/s, on demand), `samples` (scene MSAA by dpr), `memory` (device memory by label) |
+| `src/adapters/` | `gpu` (headless device + `RenderState`, what it holds by label), `painter` (one frame into the offscreen texture, egui-wgpu's own call order), `readback`, `pictures` (the model's pictures: small ones on the CPU, larger ones on a picture renderer made on demand and dropped when idle), `encode` (JPEG/PNG with `image`, parallel with rayon), `link` (leg A: reader/writer threads), `control` (upstream's control server, no token or discovery files), `clipboard` (arboard), `logging` |
 | `src/app/` | `ui_host` (SolveApp assembly, one pass, paint, screenshots), `frames` (readback → diff → encode against credits, idle refinement), `output` (cursor/IME/copy), `services` (pickers → `ask_save`/`ask_open`), `policy` (read-only backstop), `stream` (the leg-A loop), `snapshot` (M1, offline `--script`) |
 | `spike/leg-a.mjs` | Node harness that plays the host on leg A (M2 over the wire, M3 server+transport latency) |
 | `spike/ctl.mjs` | one control-channel request from a shell |
+| `spike/mem.sh` | memory per scenario on Linux (M1 run + leg-A orbit, dpr 1 and 2; see "Memory") |
 | `spike/m2-orbit.json` | offline M2 script: right-drag 200 px in the pane centre (default "Fusion" navigation: right drag orbits, `crates/ui-egui/src/prefs.rs:120-129`) |
 
 Edits to existing upstream files (design §1.1, the whole list):
@@ -33,6 +34,10 @@ Edits to existing upstream files (design §1.1, the whole list):
 - E3 (bookkeeping, not in the design's table): one row in `xtask/src/layers.rs` `TABLE` registering
   `render-server` as an app (`Class::Exempt`, like `cli` and `web`); without it `cargo xtask layers`
   (part of `cargo xtask ci`) fails with "unknown workspace crate".
+- E4 (memory): `crates/ui-egui/src/fonts.rs` keeps the system fallback faces as shared bytes
+  (`egui::epaint::text::Blob`) and installs them with `FontData::from_blob`, instead of copying each
+  file into every installation: one copy of each face instead of two (more while a font change is
+  being applied). These files are tens of MB on macOS and Windows. Upstreamable as it is.
 - The workspace already takes `apps/*` (`Cargo.toml:3`); `Cargo.lock` gains the package on the first
   build (not edited by hand).
 
@@ -195,6 +200,64 @@ cold start ≤ 3 s p50 (Mac, hardware); RSS per process with the fan recorded, �
 The harness's numbers are the server + loopback share: if they already miss the budget, the pane
 cannot make it up. Levers in order: smaller rectangles, the JPEG encoder (`turbojpeg`), a pipelined
 readback ring, the half-size draft during drags, then H.264.
+
+## Memory
+
+Where it goes: `frames.json` `gpuMemory` (M1) and the `gpu memory:` line at `stop` (leg A,
+`SOLIDCRAFT_RENDER_LOG=info`) list what the device holds, by label, where the backend can say (Vulkan,
+D3D12; on a Mac read `footprint PID`, which counts Metal's memory too). On lavapipe the device's memory
+is process memory (`RssShmem`), so on Linux `spike/mem.sh` splits a scenario into malloc (`RssAnon`)
+and graphics (`RssShmem`): the M1 run (read 3 s into the hold) and a leg-A orbit, at dpr 1 and 2.
+
+What a streamed frame does not need, and what was cut (all in this crate except E4):
+
+| Cut | Why it was there | Effect |
+|---|---|---|
+| Scene MSAA by dpr (`domain/samples.rs`, `--msaa`): 1 at dpr ≥ 2, else 2 where the device has it | the desktop's 4× | 4× colour + depth were 188 of the scene's 203 MiB at 2560×1600 |
+| Small pictures on the CPU rasterizer, larger ones on a picture renderer made on demand and dropped 3 s after (`adapters/pictures.rs`) | the desktop makes a second copy of the viewport's pipelines at start | on lavapipe ~140 MiB of malloc (compiled shaders) |
+| One frame on the CPU: compared where it is mapped, changed rectangles copied over the last frame sent (`adapters/readback.rs`, `domain/damage.rs`) | a read-back copy and the last frame sent | one frame (4 / 16 MiB at dpr 1 / 2) and its copy per frame |
+| The screenshot read-back buffer is dropped after each screenshot (`app/ui_host.rs`) | kept after the first one | one frame of GPU-visible memory |
+| Small device memory blocks (`MemoryHints::MemoryUsage`, `adapters/gpu.rs`) | 128–256 MiB blocks | reserved 192 → 92 MiB on Vulkan; no RSS change on lavapipe |
+| E4: system fallback faces shared, not copied into each font installation | — | one copy of each face instead of two (tens of MB on macOS/Windows; 4 MB on the Linux build host) |
+
+Measured on a Linux build host (lavapipe, 6 threads), the fan at 1280×800, `spike/mem.sh`: MiB of
+VmRSS, which includes ~170 MiB of the binary's own pages (a Mac's footprint does not count clean file
+pages); malloc / graphics (RssAnon / RssShmem) in brackets. "orbit" is the highest sample of the leg-A
+orbit run.
+
+| Build | M1 dpr 1 | orbit dpr 1 | M1 dpr 2 | orbit dpr 2 |
+|---|---|---|---|---|
+| before | 724 (478 / 75) | 736 | 918 (496 / 251) | 967 |
+| scene MSAA 1 alone | 671 | 697 | 758 | 808 |
+| no picture renderer alone | 573 | 595 | 766 | 821 |
+| small memory blocks alone | 714 | 737 | 919 | 968 |
+| all cuts, `--msaa 4` | 568 (331 / 68) | 580 | 761 (344 / 246) | 811 |
+| all cuts (MSAA by dpr: 1 on lavapipe at both) | **521** (322 / 29) | **538** | **601** (341 / 91) | **642** |
+
+The frames themselves differ only where MSAA was: frame 30 of the M1 run differs from the 4× one in
+0.9 % of its pixels at dpr 1 and 0.5 % at dpr 2 (by more than 24 levels), all on model edges, and not
+at all from a run with only `--msaa 1`. At dpr 1 one sample shows stairs on the model's edges when
+looked at closely, hence 2× there on devices that have it (lavapipe has 1 and 4 only, so it draws 1);
+at dpr 2 they do not show at 1:1.
+
+Latency did not move (leg-A orbit, 3 cold starts each, p50 / p95 ms and frames/s, same host, 6
+threads): before, R2 42.9–45.4 / 49–51 at 25 fps and R1 118–123 / 137–215 at 8.6–9.0; all cuts at
+`--msaa 4` (4 runs), R2 43.0–45.8 / 47–49 at 25–26 and R1 117–124 / 120–203 at 8.6–9.0; all cuts (one sample
+on lavapipe), R2 30.9–32.2 / 36–39 at 36–37 and R1 77–80 / 88–145 at 13.7–14.1 (lavapipe draws
+fewer samples faster; a GPU will not gain much there).
+
+A large picture (the model's 1280×800 `ui.render`) still makes the picture renderer: on lavapipe
+malloc +143 and device memory +54 MiB; dropped 3 s later, malloc fell back by 39 only and the device
+memory block stayed (glibc and the Vulkan allocator keep what they freed; Metal frees its objects).
+The reply's `renderer` says `gpu`/`gpu-software`; a 320×200 one says `cpu` and costs nothing.
+
+With no design open the same process holds 356 / 417 MiB (malloc 219 / 220): the fan's design,
+history and meshes are ~105 MiB of malloc.
+
+What stays: the scene's own colour and depth at the frame's size (the depth is 32-bit float with
+stencil, 8 bytes a pixel, for reversed depth and section caps), the frame texture and its read-back
+buffer, and the last frame sent. Not measured on a Mac yet (no GPU on the build hosts): the Mac's
+footprint must be read again there.
 
 ## Behaviour to know while measuring
 

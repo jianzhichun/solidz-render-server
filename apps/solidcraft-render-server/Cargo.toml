@@ -20,8 +20,11 @@ profile = ["solidcraft-engine/profile"]
 solidcraft-ui-egui = { workspace = true }
 solidcraft-engine = { workspace = true }
 solidcraft-control = { workspace = true }
-# Adapter tiers, the native backends and the D3D12 shader compiler (the headless device).
+# Adapter tiers, the native backends and the D3D12 shader compiler (the headless device); the
+# picture renderer.
 solidcraft-viewport-gpu = { workspace = true }
+# The scene and camera a picture is drawn from.
+solidcraft-viewport = { workspace = true }
 # The look's tables, installed before the fonts as the desktop app does.
 solidcraft-look = { workspace = true }
 egui = { workspace = true }

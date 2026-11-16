@@ -23,6 +23,7 @@ use crate::adapters::painter::Painted;
 use crate::domain::geometry::FrameSize;
 use crate::domain::input::{self, InputEvent, Translator};
 use crate::domain::pacing::Schedule;
+use crate::domain::samples::Msaa;
 use crate::domain::wire::{ByeWhy, HostMsg, PROTOCOL_VERSION, ServerMsg};
 
 /// Exit codes the host may read (it acts on `bye`; these are for logs).
@@ -37,6 +38,7 @@ pub struct StreamArgs {
     pub ui: UiOptions,
     pub size: FrameSize,
     pub adapter: Policy,
+    pub msaa: Msaa,
 }
 
 /// How the loop ends: the exit code and the last message to send.
@@ -77,7 +79,7 @@ pub fn run(args: StreamArgs) -> i32 {
             return EXIT_SETUP;
         }
     };
-    let gpu = match gpu::open(args.adapter) {
+    let gpu = match gpu::open(args.adapter, args.msaa, args.size.dpr) {
         Ok(gpu) => gpu,
         Err(e) => {
             // No message at all: the host takes only `hello` first (anything else is refused and
@@ -213,6 +215,7 @@ impl Stream {
             if let Some(end) = self.wait(rx) {
                 return end;
             }
+            self.ui.pictures.release_idle(Instant::now());
             if self.stopping {
                 return End::bye(EXIT_OK, ByeWhy::Stop, None);
             }
@@ -235,13 +238,11 @@ impl Stream {
         }
     }
 
-    /// Sleep until the next event or deadline, then take every event that is there.
+    /// Sleep until the next event or deadline (a pass, the refinement, dropping the picture
+    /// renderer), then take every event that is there.
     fn wait(&mut self, rx: &Receiver<LoopEvent>) -> Option<End> {
         let refine = if self.visible { self.frames.refine_at() } else { None };
-        let deadline = match (self.schedule.next_pass(), refine) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        let deadline = [self.schedule.next_pass(), refine, self.ui.pictures.release_at()].into_iter().flatten().min();
         let first = match deadline {
             Some(at) => match rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
                 Ok(event) => Some(event),
@@ -320,6 +321,9 @@ impl Stream {
             }
             HostMsg::Stop { why } => {
                 log::info!("stop: {why}");
+                if let Some(m) = gpu::memory(&self.gpu.rs.device) {
+                    log::info!("gpu memory: {}", m.line(12));
+                }
                 self.stopping = true;
             }
             HostMsg::Error { code, message } => {

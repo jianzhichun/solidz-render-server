@@ -22,6 +22,7 @@ use crate::adapters::painter::Painted;
 use crate::domain::geometry::FrameSize;
 use crate::domain::input::{self, Translator};
 use crate::domain::pacing::Schedule;
+use crate::domain::samples::Msaa;
 
 pub struct SnapshotArgs {
     pub dir: PathBuf,
@@ -33,6 +34,7 @@ pub struct SnapshotArgs {
     pub ui: UiOptions,
     pub size: FrameSize,
     pub adapter: Policy,
+    pub msaa: Msaa,
 }
 
 /// One step of a script: wire input events (PROTOCOL.md, "InputEvent") before frame `frame`.
@@ -57,7 +59,7 @@ pub fn run(args: SnapshotArgs) -> i32 {
             return EXIT_SETUP;
         }
     };
-    let gpu = match gpu::open(args.adapter) {
+    let gpu = match gpu::open(args.adapter, args.msaa, args.size.dpr) {
         Ok(gpu) => gpu,
         Err(e) => {
             eprintln!("render-server: {e}");
@@ -204,10 +206,11 @@ impl Snapshot {
             if now >= until {
                 return EXIT_OK;
             }
-            let wake = self.schedule.next_pass().map_or(until, |at| at.min(until));
+            let wake = [self.schedule.next_pass(), self.ui.pictures.release_at()].into_iter().flatten().fold(until, Instant::min);
             if let Ok(LoopEvent::Repaint(delay)) = self.rx.recv_timeout(wake.saturating_duration_since(now)) {
                 self.schedule.repaint_after(Instant::now(), delay);
             }
+            self.ui.pictures.release_idle(Instant::now());
             if self.schedule.due(Instant::now()) && self.frame(Vec::new()).is_err() {
                 return EXIT_DEVICE_LOST;
             }
@@ -225,6 +228,8 @@ impl Snapshot {
             "samples": self.ui.app.viewport.gpu.map_or(self.gpu.scene_samples, |g| g.samples),
             "size": {"w": size.css_w, "h": size.css_h, "dpr": size.dpr, "pxW": size.px_w, "pxH": size.px_h},
             "frames": frames,
+            // Where the backend can say (Vulkan, D3D12): what the device holds, by label.
+            "gpuMemory": gpu::memory(&self.gpu.rs.device).map(|m| m.to_json(16)),
         });
         let text = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("frames.json"), text).map_err(|e| e.to_string())

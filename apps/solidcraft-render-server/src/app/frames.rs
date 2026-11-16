@@ -1,7 +1,9 @@
 //! Frames out (PROTOCOL.md, "Frame rules"): the painted texture read back, compared with the
 //! last frame sent, the changed rectangles encoded, against credits. While credits are 0 the
 //! changed region keeps growing (it is relative to the last frame *sent*), so nothing is lost.
-//! After a quiet spell, what went out as JPEG goes again losslessly.
+//! After a quiet spell, what went out as JPEG goes again losslessly. One frame is kept on the
+//! CPU: the read-back is compared where it was mapped, and what changed is copied over the last
+//! frame sent before it is encoded from there.
 
 use std::time::{Duration, Instant};
 
@@ -27,9 +29,7 @@ pub struct FrameStream {
     seq: u64,
     credits: Credits,
     readback: Readback,
-    /// This read-back; becomes `sent` when it goes out.
-    current: Vec<u8>,
-    /// The true pixels of the last frame sent (not what JPEG made of them).
+    /// The true pixels of the last frame sent (not what JPEG made of them), tight RGBA rows.
     sent: Vec<u8>,
     sent_size: Option<[u32; 2]>,
     need_full: bool,
@@ -80,29 +80,33 @@ impl FrameStream {
         // Taken now: a read that fails is not retried in a loop, the next paint tries again.
         self.unsent = false;
         let px = size.px();
-        let t = Instant::now();
-        self.readback.read(rs, texture, px, &mut self.current)?;
-        let readback = ms(t);
-        let t = Instant::now();
         let grid = Grid { w: px[0], h: px[1] };
-        let full = self.need_full || self.sent_size != Some(px) || self.sent.len() != self.current.len();
-        let rects = if full {
-            vec![grid.full()]
-        } else {
-            let (sent, current) = (&self.sent, &self.current);
-            let rows: Vec<Vec<bool>> = (0..grid.tiles_y()).into_par_iter().map(|ty| grid.row_changes(sent, current, ty)).collect();
-            grid.rects(&rows)
-        };
-        let diff = ms(t);
+        let full = self.need_full || self.sent_size != Some(px) || self.sent.len() != grid.w as usize * grid.h as usize * 4;
+        let sent = &mut self.sent;
+        let t = Instant::now();
+        let (rects, readback, diff) = self.readback.with_mapped(rs, texture, px, |pixels| {
+            let readback = ms(t);
+            let t = Instant::now();
+            let rects = if full {
+                vec![grid.full()]
+            } else {
+                let prev = &*sent;
+                let rows: Vec<Vec<bool>> = (0..grid.tiles_y()).into_par_iter().map(|ty| grid.row_changes(prev, pixels, ty)).collect();
+                grid.rects(&rows)
+            };
+            pixels.copy_rects(sent, &rects);
+            (rects, readback, ms(t))
+        })?;
         if rects.is_empty() {
             return Ok(None);
         }
         let t = Instant::now();
         let pieces = codec::plan(&rects, false);
-        let (rects, payload) = encode::encode_pieces(&self.current, px[0], &pieces)?;
-        let encode = ms(t);
-        std::mem::swap(&mut self.sent, &mut self.current);
+        // `sent` already holds these pixels: a frame that fails to encode is sent whole next time.
+        self.need_full = true;
         self.sent_size = Some(px);
+        let (rects, payload) = encode::encode_pieces(&self.sent, px[0], &pieces)?;
+        let encode = ms(t);
         self.need_full = false;
         if full {
             self.lossy.clear();

@@ -10,8 +10,9 @@ use solidcraft_control::ControlRequest;
 use solidcraft_engine::Session;
 use solidcraft_ui_egui::{Services, SolveApp};
 
-use crate::adapters::gpu::{Gpu, SCENE_MSAA, STENCIL_BITS};
+use crate::adapters::gpu::{Gpu, STENCIL_BITS};
 use crate::adapters::painter::{OffscreenPainter, Painted};
+use crate::adapters::pictures::Pictures;
 use crate::adapters::readback::Readback;
 use crate::domain::geometry::FrameSize;
 
@@ -50,6 +51,7 @@ pub struct UiHost {
     deltas: egui::TexturesDelta,
     painter: OffscreenPainter,
     shots: Readback,
+    pub pictures: Pictures,
 }
 
 impl UiHost {
@@ -90,11 +92,12 @@ impl UiHost {
             .collect();
         // `apps/solidcraft/src/main.rs:1554-1600` (`view_step`, `gpu_ready`), synchronously.
         let built = SolveApp::build_wgpu_split(&gpu.rs, gpu.depth_bits, STENCIL_BITS, gpu.scene_samples, !app.cpu_meshing);
-        solidcraft_ui_egui::gpu::install_picture_renderer(&gpu.rs);
+        // The model's pictures on this device, their renderer made when one is asked for.
+        let pictures = Pictures::install(&gpu.rs);
         app.adopt_wgpu(&gpu.rs, built);
         app.msaa_supported = gpu.supported_samples.clone();
-        app.preferences.msaa = SCENE_MSAA;
-        solidcraft_ui_egui::prefs::check_msaa(&mut app, SCENE_MSAA);
+        app.preferences.msaa = gpu.scene_samples;
+        solidcraft_ui_egui::prefs::check_msaa(&mut app, gpu.scene_samples);
         // No design given: the empty design takes Units of new designs (`main.rs:1458`).
         solidcraft_ui_egui::prefs::apply_new_design(&mut app);
         // `lib.rs:1412`: requests are executed on this thread by `drain_control` → `run_control` →
@@ -111,6 +114,7 @@ impl UiHost {
             deltas: egui::TexturesDelta::default(),
             painter: OffscreenPainter::default(),
             shots: Readback::default(),
+            pictures,
         }
     }
 
@@ -238,7 +242,11 @@ impl UiHost {
             return;
         }
         let mut rgba = Vec::new();
-        match self.read_frame(gpu, &mut rgba) {
+        let read = self.read_frame(gpu, &mut rgba);
+        // Screenshots are rare in a stream: their read-back buffer (a whole frame of memory the
+        // GPU can write) is not kept between them.
+        self.shots = Readback::default();
+        match read {
             Ok(()) => {
                 let image = Arc::new(egui::ColorImage::from_rgba_unmultiplied([self.size.px_w as usize, self.size.px_h as usize], &rgba));
                 for callback in callbacks {

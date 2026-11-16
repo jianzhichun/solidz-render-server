@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use solidcraft_viewport_gpu::select::{self, Policy};
 
-/// The scene's anti-aliasing asked for, as the desktop app's default (`apps/solidcraft/src/main.rs`, `MSAA`).
-pub const SCENE_MSAA: u32 = 4;
+use crate::domain::memory::GpuMemory;
+use crate::domain::samples::Msaa;
+
 /// The section cap marks where it shows in the stencil (`apps/solidcraft/src/main.rs`, `STENCIL_BITS`).
 pub const STENCIL_BITS: u8 = 8;
 
@@ -23,13 +24,15 @@ pub struct Gpu {
     pub depth_bits: u8,
     /// The sample counts the scene can be drawn with.
     pub supported_samples: Vec<u32>,
-    /// The scene's sample count asked for (the UI's own check may still fall back to 1).
+    /// The scene's sample count asked for (`domain::samples`; the UI's own check may still fall
+    /// back to 1).
     pub scene_samples: u32,
 }
 
 /// Open the device on the adapter `policy` admits: hardware before software, then the platform's
-/// preferred backend (Windows D3D12 first, as `apps/solidcraft/src/startup.rs:435` `WINDOWS_ORDER`).
-pub fn open(policy: Policy) -> Result<Gpu, String> {
+/// preferred backend (Windows D3D12 first, as `apps/solidcraft/src/startup.rs:435` `WINDOWS_ORDER`),
+/// with the scene's samples `msaa` chooses for frames at `dpr`.
+pub fn open(policy: Policy, msaa: Msaa, dpr: f32) -> Result<Gpu, String> {
     // `vendor/egui-wgpu/src/setup.rs:241`: an instance with no display handle (headless).
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     // Metal on macOS, D3D12 and Vulkan on Windows, Vulkan and GL elsewhere; `WGPU_BACKEND` narrows
@@ -51,6 +54,10 @@ pub fn open(policy: Policy) -> Result<Gpu, String> {
     setup.device_descriptor = Arc::new(move |adapter| {
         let mut d = base(adapter);
         d.required_features |= solidcraft_viewport_gpu::depth_features(adapter);
+        // Small memory blocks (Vulkan and D3D12 carve resources out of blocks of 128-256 MiB
+        // by default, `wgpu-hal-30.0.1/src/lib.rs:439`): one frame's targets are a few blocks,
+        // not a whole idle one.
+        d.memory_hints = wgpu::MemoryHints::MemoryUsage;
         d
     });
     let config = egui_wgpu::WgpuConfiguration { wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup), ..Default::default() };
@@ -61,7 +68,8 @@ pub fn open(policy: Policy) -> Result<Gpu, String> {
     let options = egui_wgpu::RendererOptions { msaa_samples: 1, depth_stencil_format: None, ..Default::default() };
     // `vendor/egui-wgpu/src/lib.rs:389`: no surface; also the device-lost watch (`:471`).
     let rs = pollster::block_on(egui_wgpu::RenderState::create(&config, &instance, None, options)).map_err(|e| format!("graphics device: {e}"))?;
-    if !matches!(rs.target_format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm) {
+    // With no surface the format is always `Rgba8Unorm` (above): read-back rows are RGBA as they are.
+    if rs.target_format != wgpu::TextureFormat::Rgba8Unorm {
         return Err(format!("graphics device: unexpected target format {:?}", rs.target_format));
     }
     let info = rs.adapter.get_info();
@@ -69,7 +77,8 @@ pub fn open(policy: Policy) -> Result<Gpu, String> {
     // `vendor/egui-wgpu/src/lib.rs:823`; the rule the desktop and web apps share (`crates/ui-egui/src/gpu.rs:110`).
     let supported_samples =
         egui_wgpu::supported_msaa_samples(&rs.adapter, &rs.device, rs.target_format, egui_wgpu::depth_format_from_bits(depth_bits, STENCIL_BITS));
-    let scene_samples = solidcraft_ui_egui::gpu::scene_samples(info.backend, SCENE_MSAA, &supported_samples);
+    // Then the backend's own rule (OpenGL draws 1), shared by the desktop and web apps.
+    let scene_samples = solidcraft_ui_egui::gpu::scene_samples(info.backend, msaa.samples(dpr, &supported_samples), &supported_samples);
     log::info!(
         "graphics: {:?} {} ({:?}), depth {depth_bits}, scene MSAA {scene_samples}x of {supported_samples:?}",
         info.backend,
@@ -137,4 +146,11 @@ fn backend_name(b: wgpu::Backend) -> Option<&'static str> {
         wgpu::Backend::Metal => Some("metal"),
         _ => None,
     }
+}
+
+/// What the device holds by label, where the backend's allocator can say (Vulkan and D3D12;
+/// Metal and GL report nothing).
+pub fn memory(device: &wgpu::Device) -> Option<GpuMemory> {
+    let r = device.generate_allocator_report()?;
+    Some(GpuMemory::new(r.total_allocated_bytes, r.total_reserved_bytes, r.allocations.into_iter().map(|a| (a.name, a.size))))
 }
