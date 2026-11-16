@@ -214,7 +214,7 @@ What a streamed frame does not need, and what was cut (all in this crate except 
 | Cut | Why it was there | Effect |
 |---|---|---|
 | Scene MSAA by dpr (`domain/samples.rs`, `--msaa`): 1 at dpr ≥ 2, else 2 where the device has it | the desktop's 4× | 4× colour + depth were 188 of the scene's 203 MiB at 2560×1600 |
-| Small pictures on the CPU rasterizer, larger ones on a picture renderer made on demand and dropped 3 s after (`adapters/pictures.rs`) | the desktop makes a second copy of the viewport's pipelines at start | on lavapipe ~140 MiB of malloc (compiled shaders) |
+| Small pictures on the CPU rasterizer, larger ones (and analysis views) on a picture renderer made on demand and dropped 3 s after (`adapters/pictures.rs`) | the desktop makes a second copy of the viewport's pipelines at start | on lavapipe ~140 MiB of malloc (compiled shaders) |
 | One frame on the CPU: compared where it is mapped, changed rectangles copied over the last frame sent (`adapters/readback.rs`, `domain/damage.rs`) | a read-back copy and the last frame sent | one frame (4 / 16 MiB at dpr 1 / 2) and its copy per frame |
 | The screenshot read-back buffer is dropped after each screenshot (`app/ui_host.rs`) | kept after the first one | one frame of GPU-visible memory |
 | Small device memory blocks (`MemoryHints::MemoryUsage`, `adapters/gpu.rs`) | 128–256 MiB blocks | reserved 192 → 92 MiB on Vulkan; no RSS change on lavapipe |
@@ -250,6 +250,9 @@ A large picture (the model's 1280×800 `ui.render`) still makes the picture rend
 malloc +143 and device memory +54 MiB; dropped 3 s later, malloc fell back by 39 only and the device
 memory block stayed (glibc and the Vulkan allocator keep what they freed; Metal frees its objects).
 The reply's `renderer` says `gpu`/`gpu-software`; a 320×200 one says `cpu` and costs nothing.
+A small picture of a view a surface analysis shades still goes to the GPU (the rasterizer draws no
+analysis colours). As upstream's, a picture the GPU cannot draw (the picture renderer cannot be made
+on the device, or the device is lost) is drawn by the CPU rasterizer instead of failing.
 
 With no design open the same process holds 356 / 417 MiB (malloc 219 / 220): the fan's design,
 history and meshes are ~105 MiB of malloc.
