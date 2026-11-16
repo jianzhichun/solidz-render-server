@@ -35,6 +35,9 @@ jobs:
       CARGO_PROFILE_RELEASE_INCREMENTAL: 'false'
       CARGO_PROFILE_RELEASE_STRIP: 'symbols'
       CARGO_TERM_COLOR: never
+      # the C runtime linked in, as upstream's own Windows programs have it: a machine without the VC++ redistributable
+      # (a clean or LTSC install) refused to start the program (0xC0000135, VCRUNTIME140.dll not found)
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
     steps:
       - uses: actions/checkout@v4
       - name: machine
@@ -72,6 +75,17 @@ jobs:
             sed 's/^/machine=/' machine.txt
           } | tee summary.txt
       # The archive under its stable name, on every run (a candidate can be packaged from a run's artifact before a release).
+      # The program must draw a frame on this runner before anything is released: Windows with the software adapter
+      # (WARP) is what a machine without a GPU gets, and it once overflowed the 1 MiB main-thread stack there.
+      - name: smoke (one offscreen frame)
+        shell: bash
+        continue-on-error: ${{ matrix.exe == '' }}
+        run: |
+          BIN=target/release/solidcraft-render-server${{ matrix.exe }}
+          adapter=$([ -n "${{ matrix.exe }}" ] && echo software || echo auto)
+          "$BIN" --snapshot smoke-out --frames 1 --size 640x400 --adapter "$adapter" > smoke.log 2>&1 || { echo "exit $?"; cat smoke.log; exit 1; }
+          ls smoke-out | grep -q '^frame-0001.png$' || { echo "no frame written"; cat smoke.log; exit 1; }
+          echo "one frame drawn with --adapter $adapter"; grep -i -E 'adapter|backend|graphics' smoke.log | head -3 || true
       - name: archive
         shell: bash
         env:
