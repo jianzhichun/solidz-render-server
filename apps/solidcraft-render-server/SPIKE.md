@@ -38,8 +38,7 @@ Edits to existing upstream files (design §1.1, the whole list):
 
 ## Build (every host)
 
-The toolchain comes from `rust-toolchain.toml` (1.99.1). From the fork checkout on branch
-`solidz/render-server`:
+The toolchain comes from `rust-toolchain.toml` (1.99.1). From a checkout of this repository:
 
 ```sh
 cargo build -p solidcraft-render-server --release
