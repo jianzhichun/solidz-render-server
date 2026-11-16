@@ -25,6 +25,7 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: '0'
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '256'
       CARGO_PROFILE_RELEASE_INCREMENTAL: 'false'
+      CARGO_PROFILE_RELEASE_STRIP: 'symbols'
       CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +46,7 @@ jobs:
             echo "os=${{ matrix.os }}"
             echo "build_seconds=$((end-start))"
             echo "bytes=$(wc -c < "$BIN")"
-            echo "version=$("$BIN" --version)"
+            echo "version=$("$BIN" --version 2>&1)"
             (sha256sum "$BIN" 2>/dev/null || shasum -a 256 "$BIN") | sed 's/^/sha256=/'
             cat machine.txt | sed 's/^/machine=/'
           } | tee summary.txt
