@@ -1,23 +1,31 @@
-# Build the render-server (apps/solidcraft-render-server) for macOS and Windows on GitHub-hosted runners.
-# Runs on pushes to main or by hand.
+# Build the render-server (apps/solidcraft-render-server) for macOS (Apple silicon) and Windows (x64) on GitHub-hosted runners.
+# Runs on pushes to main or by hand (artifacts only), and on a pushed tag render-server-v<version>, which also publishes a
+# GitHub Release. <version> is the SolidCraft version the program is built from, optionally with a build number:
+# render-server-v0.42.0, render-server-v0.42.0-2. The binary must report that SolidCraft version or nothing is released.
+# Release assets (stable names; each archive holds one folder with the binary, <binary>.sha256 and the licence files):
+#   solidcraft-render-server-<version>-macos-arm64.tar.gz
+#   solidcraft-render-server-<version>-windows-x64.zip
+#   SHA256SUMS.txt
 name: solidz-render-server
 on:
   push:
     branches: [main]
+    tags: ['render-server-v*']
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: solidz-render-server
-  cancel-in-progress: true
+  # a tag build is never cancelled by a push to main, nor by another tag
+  group: solidz-render-server-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-15, jobs: 3, exe: '' }
-          - { os: windows-2025, jobs: 4, exe: '.exe' }
+          - { os: macos-15, target: macos-arm64, jobs: 3, exe: '', licences: true }
+          - { os: windows-2025, target: windows-x64, jobs: 4, exe: '.exe', licences: false }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 150
     env:
@@ -35,6 +43,19 @@ jobs:
           echo "runner: ${{ matrix.os }}"; uname -a || true
           (sysctl -n hw.ncpu hw.memsize 2>/dev/null || nproc 2>/dev/null || echo "$NUMBER_OF_PROCESSORS cpus") | tee machine.txt
           rustup show active-toolchain || true
+      # THIRD-PARTY-LICENSES.txt is generated for the upstream programs; it ships with this one only if it lists every
+      # registry or git crate built into it (normal dependencies, any platform). Before the build, so a gap fails fast.
+      - name: third-party licences cover the program
+        if: matrix.licences
+        shell: bash
+        run: |
+          export LC_ALL=C
+          cargo tree -p solidcraft-render-server -e normal --target all --prefix none -f '{p}' --locked \
+            | sed -E 's/ \((\*|proc-macro)\)//g' | grep -vE ' \((/|[A-Za-z]:)' | sed -E 's/ v([^ ]+).*/ \1/' | sort -u > deps.txt
+          grep -oE '^[A-Za-z0-9_.-]+ [0-9][^ ]*  \(' THIRD-PARTY-LICENSES.txt | sed -E 's/  \($//' | sort -u > listed.txt
+          missing=$(comm -23 deps.txt listed.txt)
+          echo "$(wc -l < deps.txt) third-party crates in the program, $(wc -l < listed.txt) listed"
+          if [ -n "$missing" ]; then echo "not in THIRD-PARTY-LICENSES.txt:"; echo "$missing"; exit 1; fi
       - name: build
         shell: bash
         run: |
@@ -48,8 +69,33 @@ jobs:
             echo "bytes=$(wc -c < "$BIN")"
             echo "version=$("$BIN" --version 2>&1)"
             (sha256sum "$BIN" 2>/dev/null || shasum -a 256 "$BIN") | sed 's/^/sha256=/'
-            cat machine.txt | sed 's/^/machine=/'
+            sed 's/^/machine=/' machine.txt
           } | tee summary.txt
+      # The archive under its stable name, on every run (a candidate can be packaged from a run's artifact before a release).
+      - name: archive
+        shell: bash
+        env:
+          COPYFILE_DISABLE: '1'
+        run: |
+          exe=solidcraft-render-server${{ matrix.exe }}
+          said=$("target/release/$exe" --version 2>&1)        # "solidcraft-render-server 0.42.0 (protocol 1)"
+          upstream=$(echo "$said" | awk '{print $2}')
+          if [[ "$GITHUB_REF" == refs/tags/render-server-v* ]]; then
+            version=${GITHUB_REF_NAME#render-server-v}
+            [ "${version%%-*}" = "$upstream" ] || { echo "tag $GITHUB_REF_NAME, but the binary says: $said"; exit 1; }
+          else
+            version="$upstream-g${GITHUB_SHA::7}"
+          fi
+          name=solidcraft-render-server-$version-${{ matrix.target }}
+          mkdir -p "dist/$name"
+          cp "target/release/$exe" "dist/$name/"
+          (cd "dist/$name" && (sha256sum "$exe" 2>/dev/null || shasum -a 256 "$exe") > "$exe.sha256")
+          cp LICENSE-MIT LICENSE-APACHE LICENSE-BRAND NOTICE THIRD-PARTY-LICENSES.txt "dist/$name/"
+          cp apps/solidcraft-render-server/NOTICE "dist/$name/NOTICE-render-server"
+          cd dist
+          if [ -n "${{ matrix.exe }}" ]; then 7z a -tzip -bd "$name.zip" "$name" > /dev/null; else tar -czf "$name.tar.gz" "$name"; fi
+          rm -rf "$name"
+          ls -l
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -61,3 +107,43 @@ jobs:
           name: render-server-${{ matrix.os }}
           path: target/release/solidcraft-render-server${{ matrix.exe }}
           retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: dist/*
+          compression-level: 0
+          retention-days: 14
+
+  # Only for a tag, only when both builds passed; the one job that may write to the repository.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/render-server-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          path: dist
+          merge-multiple: true
+      - name: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          version=${TAG#render-server-v}
+          files=("solidcraft-render-server-$version-macos-arm64.tar.gz" "solidcraft-render-server-$version-windows-x64.zip")
+          for f in "${files[@]}"; do [ -s "$f" ] || { echo "missing $f"; ls -l; exit 1; }; done
+          sha256sum "${files[@]}" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          {
+            echo "solidcraft-render-server $version, built from $GITHUB_SHA by run $GITHUB_RUN_ID."
+            echo
+            echo "Targets: macOS on Apple silicon (arm64), Windows x64. Each archive holds the binary, its sha256 and the licence files"
+            echo "(LICENSE-MIT, LICENSE-APACHE, LICENSE-BRAND, NOTICE, NOTICE-render-server, THIRD-PARTY-LICENSES.txt)."
+          } > notes.md
+          gh release create "$TAG" "${files[@]}" SHA256SUMS.txt -R "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes-file notes.md
