@@ -30,6 +30,9 @@ pub mod context_menu;
 pub mod control;
 pub mod control_job;
 mod control_params;
+// The control server is native only (`solidcraft_control::server`).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod control_protocol;
 pub mod control_switch;
 pub mod crash_ui;
 pub mod deferred;

@@ -1,0 +1,39 @@
+[package]
+name = "solidcraft-render-server"
+description = "SolidCraft's editing UI drawn offscreen (no window) and streamed to an embedding host: frames out, the user's input in, the control channel on the same session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# The same engine features as the desktop app (apps/solidcraft), so the UI behaves the same.
+[features]
+default = ["raytrace-cpu", "bundled-render-library", "profile"]
+bundled-render-library = ["solidcraft-engine/bundled-render-library"]
+raytrace-cpu = ["solidcraft-engine/raytrace-cpu"]
+profile = ["solidcraft-engine/profile"]
+
+[dependencies]
+solidcraft-ui-egui = { workspace = true }
+solidcraft-engine = { workspace = true }
+solidcraft-control = { workspace = true }
+# Adapter tiers, the native backends and the D3D12 shader compiler (the headless device).
+solidcraft-viewport-gpu = { workspace = true }
+# The look's tables, installed before the fonts as the desktop app does.
+solidcraft-look = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+wgpu = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+pollster = { workspace = true }
+# Frame stripes encoded in parallel, tile rows compared in parallel.
+rayon = { workspace = true }
+# JPEG for large changed regions, PNG for snapshots and the idle refinement (pure Rust).
+image = { workspace = true, features = ["jpeg", "png"] }
+# The UI's copied text goes to the system clipboard here; same version and features as the UI crate.
+arboard = { version = "3.6", default-features = false, features = ["image-data"] }

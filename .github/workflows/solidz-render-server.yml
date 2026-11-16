@@ -1,0 +1,62 @@
+# Build the render-server (apps/solidcraft-render-server) for macOS and Windows on GitHub-hosted runners.
+# Runs on pushes to main or by hand.
+name: solidz-render-server
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: solidz-render-server
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, jobs: 3, exe: '' }
+          - { os: windows-2025, jobs: 4, exe: '.exe' }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    env:
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '256'
+      CARGO_PROFILE_RELEASE_INCREMENTAL: 'false'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+      - name: machine
+        shell: bash
+        run: |
+          echo "runner: ${{ matrix.os }}"; uname -a || true
+          (sysctl -n hw.ncpu hw.memsize 2>/dev/null || nproc 2>/dev/null || echo "$NUMBER_OF_PROCESSORS cpus") | tee machine.txt
+          rustup show active-toolchain || true
+      - name: build
+        shell: bash
+        run: |
+          start=$(date +%s)
+          cargo build -p solidcraft-render-server --release -j ${{ matrix.jobs }}
+          end=$(date +%s)
+          BIN=target/release/solidcraft-render-server${{ matrix.exe }}
+          {
+            echo "os=${{ matrix.os }}"
+            echo "build_seconds=$((end-start))"
+            echo "bytes=$(wc -c < "$BIN")"
+            echo "version=$("$BIN" --version)"
+            (sha256sum "$BIN" 2>/dev/null || shasum -a 256 "$BIN") | sed 's/^/sha256=/'
+            cat machine.txt | sed 's/^/machine=/'
+          } | tee summary.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: summary-${{ matrix.os }}
+          path: summary.txt
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: render-server-${{ matrix.os }}
+          path: target/release/solidcraft-render-server${{ matrix.exe }}
+          retention-days: 14
