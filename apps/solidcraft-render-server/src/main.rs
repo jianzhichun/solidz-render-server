@@ -21,7 +21,7 @@ use domain::geometry::FrameSize;
 fn main() {
     adapters::logging::install();
     let options = match cli::parse(std::env::args().skip(1)) {
-        Ok(Parsed::Run(o)) => o,
+        Ok(Parsed::Run(o)) => *o,
         Ok(Parsed::Help) => {
             eprintln!("{}", cli::USAGE);
             return;
@@ -37,6 +37,10 @@ fn main() {
     };
     if let Some(session) = &options.session {
         log::info!("session {session}");
+    }
+    // Before the UI reads any of them: recovery, crash reports, data and cache in the host's folder.
+    if let Some(dir) = options.config_dir {
+        solidcraft_engine::recovery::set_user_dir(dir);
     }
     let ui = UiOptions { lang: options.lang, dark: options.dark };
     let size = FrameSize::new(options.css.0, options.css.1, options.dpr);

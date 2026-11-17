@@ -9,6 +9,7 @@
 //! last. As upstream's, a picture the GPU cannot draw (no picture renderer on this device, the
 //! device lost) is drawn by the CPU rasterizer, so a save still writes its thumbnail.
 
+use std::cell::Cell;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -32,6 +33,18 @@ pub const CPU_MAX_PIXELS: u64 = 512 * 512;
 /// shades the scene.
 fn on_cpu(w: u32, h: u32, analysis: bool) -> bool {
     !analysis && u64::from(w) * u64::from(h) <= CPU_MAX_PIXELS
+}
+
+thread_local! {
+    /// The picture this thread drew last was a small one the CPU draws by choice ([`on_cpu`]).
+    static CPU_BY_CHOICE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Was the picture this thread just drew drawn by the CPU by choice, not for want of a GPU? The
+/// engine logs its CPU warning right after, on the same thread (`solidcraft_engine::capture::rgba_with`),
+/// and that warning names a GPU that is missing ([`crate::adapters::logging`] leaves it out).
+pub fn cpu_by_choice() -> bool {
+    CPU_BY_CHOICE.with(Cell::get)
 }
 
 /// What a picture renderer is made on.
@@ -85,7 +98,10 @@ impl Pictures {
 }
 
 fn draw(device: &Device, slot: &Mutex<Slot>, scene: &Scene, cam: &Camera, w: u32, h: u32) -> Result<Picture, String> {
-    if on_cpu(w, h, scene.analysis.is_some()) {
+    let by_choice = on_cpu(w, h, scene.analysis.is_some());
+    CPU_BY_CHOICE.with(|c| c.set(by_choice));
+    if by_choice {
+        log::debug!("a {w}×{h} picture drawn by the CPU rasterizer, as small pictures are here (the GPU is not missing)");
         return Ok(cpu(scene, cam, w, h));
     }
     let Some(capturer) = capturer(device, slot)? else { return Ok(cpu(scene, cam, w, h)) };

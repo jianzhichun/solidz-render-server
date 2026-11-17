@@ -10,13 +10,26 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use solidcraft_doc::Document;
 
 use crate::{EngineError, Result, Session};
+
+/// An embedding host's own folder for SolidCraft's per-user files ([`set_user_dir`]).
+static USER_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Keep SolidCraft's per-user files in `dir`, for this process, instead of the platform's per-user
+/// folders (shared with a desktop install): the recovery folder becomes `dir/recovery`, the crash
+/// folder `dir/crashes`, and [`data_dir`] and [`cache_dir`] are `dir` (as they are one folder on
+/// Windows). For an app that embeds SolidCraft and keeps its state in a folder of its own; call it
+/// once, at start, before any of them is read. `SOLIDCRAFT_RECOVERY_DIR` and `SOLIDCRAFT_CRASH_DIR`
+/// still win. → `false` when a folder was set already (the first one stays).
+pub fn set_user_dir(dir: PathBuf) -> bool {
+    USER_DIR.set(dir).is_ok()
+}
 
 /// The recovery folder: `SOLIDCRAFT_RECOVERY_DIR`, else the platform's per-user data folder.
 /// Spelled with long names (`vfs::long_names`): an agent's commands reach it by this path, and
@@ -29,6 +42,9 @@ pub fn default_dir() -> Option<PathBuf> {
     }
     if let Some(d) = solidcraft_geom::env::var_os("RECOVERY_DIR").filter(|d| !d.is_empty()) {
         return Some(long_names(Path::new(&d)));
+    }
+    if let Some(d) = USER_DIR.get() {
+        return Some(long_names(&d.join("recovery")));
     }
     let env = |k: &str| std::env::var_os(k).filter(|d| !d.is_empty()).map(PathBuf::from);
     let root = if cfg!(windows) {
@@ -55,6 +71,9 @@ pub fn default_dir() -> Option<PathBuf> {
 /// `~/Library/Application Support/SolidCraft`, or `$XDG_DATA_HOME/solidcraft`
 /// (`~/.local/share/solidcraft`).
 pub fn data_dir() -> Option<PathBuf> {
+    if let Some(d) = USER_DIR.get() {
+        return Some(d.clone());
+    }
     let env = |k: &str| std::env::var_os(k).filter(|d| !d.is_empty()).map(PathBuf::from);
     if cfg!(windows) {
         Some(env("LOCALAPPDATA")?.join("SolidCraft"))
@@ -70,6 +89,9 @@ pub fn data_dir() -> Option<PathBuf> {
 /// `$XDG_CACHE_HOME/solidcraft` (`~/.cache/solidcraft`). Unlike the system's temporary folder, it
 /// is still there after a restart.
 pub fn cache_dir() -> Option<PathBuf> {
+    if let Some(d) = USER_DIR.get() {
+        return Some(d.clone());
+    }
     let env = |k: &str| std::env::var_os(k).filter(|d| !d.is_empty()).map(PathBuf::from);
     if cfg!(windows) {
         Some(env("LOCALAPPDATA")?.join("SolidCraft"))

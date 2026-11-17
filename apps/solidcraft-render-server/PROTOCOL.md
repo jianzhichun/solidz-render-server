@@ -41,8 +41,20 @@ the page's `input`, `resize`, `visible`, `ack` (unchanged). Everything else is t
 ## Starting (leg A)
 
 ```
-solidcraft-render-server --stream 127.0.0.1:PORT [--session ID] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light]
+solidcraft-render-server --stream 127.0.0.1:PORT [--session ID] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light] [--config-dir DIR]
 ```
+
+`--config-dir DIR` (absolute; a relative one is refused: exit 1 before `hello`, the reason on stderr): SolidCraft's
+per-user files are kept in `DIR` instead of the user's own folders (`%LOCALAPPDATA%\SolidCraft`,
+`~/Library/Application Support/SolidCraft` and `~/Library/Caches/SolidCraft`, `~/.local/share/solidcraft`
+and `~/.cache/solidcraft`), which a desktop install of SolidCraft shares: the recovery folder is
+`DIR/recovery`, crash reports `DIR/crashes`, and the data and cache folders (the pictures of opened
+designs in `DIR/thumbnails`, agent chat, plugins, files sent to a slicer) `DIR` itself
+(`solidcraft_engine::recovery::set_user_dir`). `SOLIDCRAFT_RECOVERY_DIR` and `SOLIDCRAFT_CRASH_DIR`
+still win. The graphics driver's own shader cache (Mesa's, Windows' `D3DSCache`) stays the driver's. The editing UI's preferences and
+keyboard shortcuts are not written anywhere: the render server has no settings store (upstream's
+desktop app keeps them in its window toolkit's storage), so a change lasts as long as the process.
+Without the flag the user's own folders are used, as upstream's are.
 
 Environment: `SOLIDCRAFT_RENDER_TOKEN` (64 lowercase hex, required: sent back in `hello`, proves the
 connection is the process the host started) and `SOLIDCRAFT_CONTROL_TOKEN` (64 lowercase hex: the

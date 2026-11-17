@@ -10,8 +10,8 @@ use solidcraft_viewport_gpu::select::Policy;
 use crate::domain::samples::Msaa;
 
 pub const USAGE: &str = "usage:
-  solidcraft-render-server --stream 127.0.0.1:PORT [--session ID] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light] [--adapter auto|hardware|software] [--msaa auto|1|2|4]
-  solidcraft-render-server --snapshot DIR --frames N [--open FILE] [--script FILE] [--hold-ms N] [--gap-ms N] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light] [--adapter ...] [--msaa ...]
+  solidcraft-render-server --stream 127.0.0.1:PORT [--session ID] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light] [--config-dir DIR] [--adapter auto|hardware|software] [--msaa auto|1|2|4]
+  solidcraft-render-server --snapshot DIR --frames N [--open FILE] [--script FILE] [--hold-ms N] [--gap-ms N] [--size WxH] [--dpr N] [--lang zh] [--theme dark|light] [--config-dir DIR] [--adapter ...] [--msaa ...]
 environment: SOLIDCRAFT_RENDER_TOKEN and SOLIDCRAFT_CONTROL_TOKEN (64 hex each; stream mode), SOLIDCRAFT_RENDER_LOG=error|warn|info|debug";
 
 #[derive(Debug, PartialEq)]
@@ -35,11 +35,13 @@ pub struct Options {
     pub adapter: Policy,
     /// The scene's samples (`domain::samples`).
     pub msaa: Msaa,
+    /// The host's folder for SolidCraft's per-user files (absolute); `None`: the user's own.
+    pub config_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Parsed {
-    Run(Options),
+    Run(Box<Options>),
     Help,
     Version,
 }
@@ -57,6 +59,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> {
         dark: true,
         adapter: Policy::Auto,
         msaa: Msaa::Auto,
+        config_dir: None,
     };
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -87,6 +90,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> {
                     .ok_or("--adapter: auto, hardware or software (the UI needs a GPU device)")?
             }
             "--msaa" => o.msaa = Msaa::parse(&value()?).ok_or("--msaa: auto, 1, 2, 4 or 8")?,
+            "--config-dir" => {
+                // Absolute: the process starts in the session's folder, where a relative one would land.
+                let dir = PathBuf::from(value()?);
+                if !dir.is_absolute() {
+                    return Err(format!("--config-dir: an absolute folder, not {}", dir.display()));
+                }
+                o.config_dir = Some(dir);
+            }
             "--snapshot" => snapshot = Some(PathBuf::from(value()?)),
             "--frames" => frames = Some(value()?.parse::<u32>().ok().filter(|n| *n > 0).ok_or("--frames: a positive count")?),
             "--open" => open = Some(PathBuf::from(value()?)),
@@ -102,7 +113,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> {
         (Some(_), Some(_)) => return Err("--stream and --snapshot exclude each other".into()),
         (None, None) => return Err("--stream or --snapshot is required".into()),
     };
-    Ok(Parsed::Run(o))
+    Ok(Parsed::Run(Box::new(o)))
 }
 
 /// `WxH` in CSS px.
@@ -122,7 +133,7 @@ mod tests {
 
     fn run(args: &str) -> Result<Options, String> {
         match parse(args.split_whitespace().map(String::from))? {
-            Parsed::Run(o) => Ok(o),
+            Parsed::Run(o) => Ok(*o),
             other => Err(format!("{other:?}")),
         }
     }
@@ -145,5 +156,15 @@ mod tests {
         assert!(run("--adapter cpu --snapshot out").is_err());
         assert!(run("--session s").unwrap_err().contains("required"));
         assert!(run("--stream 127.0.0.1:1 --snapshot out").is_err());
+    }
+
+    #[test]
+    fn the_config_folder_is_absolute() {
+        let dir = std::env::temp_dir().join("solidz-editor");
+        // As one argument: a temporary folder may have a space in it.
+        let args = ["--stream", "127.0.0.1:1", "--config-dir"].map(String::from).into_iter().chain([dir.to_string_lossy().into_owned()]);
+        assert!(matches!(parse(args), Ok(Parsed::Run(o)) if o.config_dir.as_deref() == Some(dir.as_path())));
+        assert_eq!(run("--stream 127.0.0.1:1").unwrap().config_dir, None);
+        assert!(run("--stream 127.0.0.1:1 --config-dir editor").unwrap_err().contains("absolute"));
     }
 }

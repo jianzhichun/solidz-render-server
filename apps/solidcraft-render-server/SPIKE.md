@@ -21,6 +21,7 @@ listed at the end.
 | `spike/leg-a.mjs` | Node harness that plays the host on leg A (M2 over the wire, M3 server+transport latency) |
 | `spike/ctl.mjs` | one control-channel request from a shell |
 | `spike/mem.sh` | memory per scenario on Linux (M1 run + leg-A orbit, dpr 1 and 2; see "Memory") |
+| `spike/userdirs.sh` | what one session writes under the user's own folders (Linux, fresh `HOME`; see "Behaviour to know while measuring") |
 | `spike/m2-orbit.json` | offline M2 script: right-drag 200 px in the pane centre (default "Fusion" navigation: right drag orbits, `crates/ui-egui/src/prefs.rs:120-129`) |
 
 Edits to existing upstream files (design §1.1, the whole list):
@@ -38,6 +39,16 @@ Edits to existing upstream files (design §1.1, the whole list):
   (`egui::epaint::text::Blob`) and installs them with `FontData::from_blob`, instead of copying each
   file into every installation: one copy of each face instead of two (more while a font change is
   being applied). These files are tens of MB on macOS and Windows. Upstreamable as it is.
+- E5 (per-user folders, `--config-dir`): `crates/engine/src/recovery.rs` `set_user_dir` (a
+  process-wide folder that `default_dir`, `data_dir` and `cache_dir` answer with, so crash reports
+  follow) and `crates/engine/tests/user_dir.rs` (its own test binary). Upstreamable as it is.
+- E6 (the UI's language): `crates/ui-egui/src/i18n.rs` `tr_engine_error` (a command refused in its
+  context, a missing parameter), `dialogs.rs` (`shown_error` through it, Create Issue… translated,
+  no Create Issue for the host's read-only refusal: that check uses E2), `toolbar.rs` (Export itself
+  from command search asks where to save; `EXPORT_EXTENSIONS`, also in `context_menu.rs`),
+  `dialogs_sheet.rs` (the flat-pattern export's status lines), a test in `file_picker.rs`, and the
+  messages in `assets/locales/pending/command-refusals-and-export-status.json`. Upstreamable except
+  the read-only check.
 - The workspace already takes `apps/*` (`Cargo.toml:3`); `Cargo.lock` gains the package on the first
   build (not edited by hand).
 
@@ -253,6 +264,9 @@ The reply's `renderer` says `gpu`/`gpu-software`; a 320×200 one says `cpu` and 
 A small picture of a view a surface analysis shades still goes to the GPU (the rasterizer draws no
 analysis colours). As upstream's, a picture the GPU cannot draw (the picture renderer cannot be made
 on the device, or the device is lost) is drawn by the CPU rasterizer instead of failing.
+The engine logs its CPU warning after every picture the CPU draws ("no GPU adapter qualified, or
+SOLIDCRAFT_GPU=cpu"); after the small ones drawn there by choice that is wrong, so the log leaves it
+out (one `debug` line says what was drawn instead); it stays for the fallbacks above.
 
 With no design open the same process holds 356 / 417 MiB (malloc 219 / 220): the fan's design,
 history and meshes are ~105 MiB of malloc.
@@ -283,6 +297,13 @@ footprint must be read again there.
   design if the revision still moved, and keeps another design that was opened instead.
 - `ask_done.ok` = an answer path was given and the pass that ran the picker's completion set no
   error on the status line (the UI reports export failures there).
+- The user's own folders: `spike/userdirs.sh BIN DESIGN OUT [args]` runs one snapshot session with
+  an edit under a fresh `HOME` and lists what it made there. Linux, lavapipe, the fan: without
+  `--config-dir`, `~/.cache/solidcraft/thumbnails/<hash>.png` (Home's picture of the opened design,
+  upstream's per-user cache, which a desktop install shares) besides the driver's own
+  `~/.cache/mesa_shader_cache_db`; with `--config-dir DIR`, the picture is `DIR/thumbnails/<hash>.png`
+  and `HOME` holds only the driver's cache. No preferences or keyboard-shortcut file is written
+  either way: there is no settings store here (PROTOCOL.md, "Starting").
 
 ## Most likely compile breaks (check these first)
 
