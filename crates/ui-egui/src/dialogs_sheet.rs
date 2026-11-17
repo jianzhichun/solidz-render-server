@@ -597,13 +597,13 @@ fn export_flat(app: &mut SolveApp, body: &str, extension: &str) -> String {
         let message = if let Some(path) = path {
             match app.run(command, json!({"body": body, "path": path})) {
                 Ok(_) => {
-                    app.set_status(solidcraft_ui_text::format("ui.exported_to", &[("path", &path)]), false);
-                    solidcraft_ui_text::format("ui.saved_to", &[("path", &path)])
+                    app.set_status(format!("Exported {path}"), false);
+                    format!("Saved {path}")
                 }
-                Err(e) => crate::friendly_error(command, &e),
+                Err(e) => e,
             }
         } else {
-            solidcraft_ui_text::tr("ui.export_cancelled").to_string()
+            "Export cancelled".into()
         };
         if let Some(d) = app.dialog.as_mut()
             && let Kind::Sheet(Sm::FlatPattern { status, .. }) = &mut d.kind
@@ -611,7 +611,7 @@ fn export_flat(app: &mut SolveApp, body: &str, extension: &str) -> String {
             *status = Some(message);
         }
     });
-    solidcraft_ui_text::tr("ui.choose_export_file").to_string()
+    "Choose an export file…".into()
 }
 
 // ---- commands ----

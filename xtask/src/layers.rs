@@ -101,8 +101,6 @@ pub const TABLE: &[(&str, Class)] = &[
     ("solidcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
-    // the editing UI drawn offscreen and streamed to an embedding host (apps/solidcraft-render-server)
-    ("render-server", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 

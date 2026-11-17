@@ -108,8 +108,8 @@ pub trait LocaleNames {
     /// multi-word Hebrew or Arabic name reads from the right like the interface's own labels (#10471).
     fn given_name(self, text: &str) -> String;
     /// Evaluation errors stay English for scripts; the empty Cut/Intersect hint that names
-    /// another component, and a feature's request to reselect a reference it lost, are translated
-    /// where they are shown. Other text is returned unchanged.
+    /// another component, a feature's request to reselect a reference it lost, and an open
+    /// Stitch result are translated where they are shown. Other text is returned unchanged.
     fn diagnostic(self, text: &str) -> String;
     /// Translate generated browser names and labels, preserving custom names otherwise.
     fn dynamic(self, text: &str) -> String;
@@ -151,6 +151,18 @@ impl LocaleNames for Locale {
                 _ => self.format("diagnostic.lost_projections_more", &args),
             };
         }
+        if let Some((before, detail)) = text.split_once("Stitch result `")
+            && let Some((body, detail)) = detail.rsplit_once("` remains open (boundary edges: ")
+            && let Some((count, after)) = detail.split_once(").")
+            && !body.is_empty()
+            && !count.is_empty()
+            && count.bytes().all(|c| c.is_ascii_digit())
+            && count.parse::<usize>().is_ok_and(|count| count > 0)
+        {
+            let body = self.given_name(body);
+            let message = self.format("diagnostic.stitch_open_edges", &[("body", &body), ("count", count)]);
+            return format!("{before}{message}{after}");
+        }
         const PREFIX: &str = "there is no body to cut or intersect in component '";
         if let Some((before, detail)) = text.split_once(PREFIX)
             && let Some((component, detail)) = detail.split_once("'; the tool may overlap '")
@@ -175,6 +187,9 @@ impl LocaleNames for Locale {
         }
         if let Some(count) = text.strip_prefix("Parameters (").and_then(|s| s.strip_suffix(')')) {
             return self.format("browser.parameters", &[("count", count)]);
+        }
+        if let Some(number) = text.strip_prefix("Section ").filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) {
+            return self.format("browser.section_plane", &[("number", number)]);
         }
         if let Some(count) = text.strip_suffix(" degrees of freedom")
             && !count.is_empty()
@@ -226,8 +241,28 @@ pub fn tr_engine_error(error: &str) -> String {
     {
         return format("component.error.ambiguous_name", &[("name", name), ("ids", ids)]);
     }
+    for (prefix, suffix, id) in [
+        ("ambiguous contact set `", "; use a numeric contact set ID", "contact.error.ambiguous_name"),
+        ("ambiguous exploded view `", "; use a numeric exploded view ID", "explode.error.ambiguous_name"),
+        ("ambiguous joint `", "; use a numeric joint ID", "joint.error.ambiguous_name"),
+        ("ambiguous motion study `", "; use a numeric motion study ID", "motion.error.ambiguous_name"),
+    ] {
+        if let Some((name, ids)) =
+            text.strip_prefix(prefix).and_then(|rest| rest.strip_suffix(suffix)).and_then(|rest| rest.rsplit_once("`; matching IDs: "))
+        {
+            return format(id, &[("name", name), ("ids", ids)]);
+        }
+    }
+    if text == "joint limit minimum must not exceed maximum" {
+        return tr("joint.error.limit_order").to_string();
+    }
     if text == "nothing to break at there" {
         return tr("sketch.error.nothing_to_break").to_string();
+    }
+    if let Some(name) = text.strip_prefix("sketch `").and_then(|rest| {
+        rest.strip_suffix("` comes after this sketch in the timeline, so its geometry cannot be used here. Move the source sketch earlier if its dependencies allow, or use a sketch after it.")
+    }) {
+        return format("sketch.error.source_later_in_timeline", &[("name", name)]);
     }
     if let Some(id) = offset_error_id(
         text,
@@ -252,25 +287,7 @@ pub fn tr_engine_error(error: &str) -> String {
     if let Some(id) = point_error_id(text, "fixed") {
         return format("sketch.error.point_is_fixed", &[("id", id)]);
     }
-    if let Some((command, reason)) = not_available(text) {
-        return format("command.error.not_available", &[("command", &command), ("reason", solidcraft_ui_text::tr_label(reason))]);
-    }
-    if let Some(name) = text.strip_prefix('`').and_then(|rest| rest.strip_suffix("` is required")).filter(|name| !name.contains('`')) {
-        return format("command.error.required", &[("name", name)]);
-    }
     error.to_string()
-}
-
-/// A command refused in this context (`EngineError::Disabled`): "`{id}` is not available right
-/// now: {reason}", or with the command's label in place of `` `{id}` `` (as [`crate::friendly_error`]
-/// has it). → the command's label in the interface language, and the reason.
-fn not_available(text: &str) -> Option<(String, &str)> {
-    let (subject, reason) = text.split_once(" is not available right now: ")?;
-    let command = match subject.strip_prefix('`').and_then(|rest| rest.strip_suffix('`')) {
-        Some(id) => solidcraft_ui_text::tr_label(crate::command_label(id)).to_string(),
-        None => subject.to_string(),
-    };
-    Some((command, reason))
 }
 
 /// Interface direction follows the selected catalog, including English fallback.
@@ -316,6 +333,26 @@ mod tests {
         assert_eq!(super::tr_engine_error("another error"), "another error");
     }
 
+    #[test]
+    fn assembly_ambiguity_is_translated_without_truncating_names() {
+        install();
+        let _scope = scope("de");
+        let name = "A`; matching IDs: 99; use a numeric joint ID {ids}";
+        for (kind, command, plural, id_name) in [
+            ("contact set", "contact.edit", "Kontaktsätze", "Kontaktsatz-ID"),
+            ("exploded view", "explode.delete", "Explosionsdarstellungen", "ID der Explosionsdarstellung"),
+            ("joint", "joint.delete", "Gelenke", "Gelenk-ID"),
+            ("motion study", "motion.delete", "Bewegungsuntersuchungen", "ID der Bewegungsuntersuchung"),
+        ] {
+            let message = format!("ambiguous {kind} `{name}`; matching IDs: 1, 3; use a numeric {kind} ID");
+            let expected = format!("Mehrere {plural} heißen `{name}`. Verwende eine numerische {id_name}: 1, 3.");
+            assert_eq!(super::tr_engine_error(&message), expected, "{kind}");
+            assert_eq!(super::tr_engine_error(&format!("invalid parameters for `{command}`: {message}")), expected, "{kind}");
+            let unknown = format!("ambiguous {kind} `{name}`; matching IDs: 1, 3; another reason");
+            assert_eq!(super::tr_engine_error(&unknown), unknown);
+        }
+    }
+
     /// #16164: the refusal to move a point the sketch holds fixed, or projects from a body, says
     /// which of the two it is; the translation names the point as well.
     #[test]
@@ -330,17 +367,24 @@ mod tests {
         assert_eq!(super::tr_engine_error("another error"), "another error");
     }
 
-    /// A command refused in this context, and a parameter left out, read in the interface
-    /// language: the command by its label, the reason the engine gave as it was given.
     #[test]
-    fn a_refused_command_and_a_missing_parameter_are_translated() {
+    fn a_later_sketch_source_is_translated_without_truncating_its_name() {
         install();
-        let _scope = scope("zh");
-        let label = tr_label(crate::command_label("solid.box")).to_string();
-        assert_eq!(super::tr_engine_error("`solid.box` is not available right now: 试用已结束"), format!("{label}当前不可用：试用已结束"));
-        assert_eq!(super::tr_engine_error(&format!("{label} is not available right now: 试用已结束")), format!("{label}当前不可用：试用已结束"));
-        assert_eq!(super::tr_engine_error("invalid parameters for `file.export`: `path` is required"), "缺少 `path`");
-        assert_eq!(super::tr_engine_error("`a` or `b` is required"), "`a` or `b` is required", "only one parameter is named");
+        let _scope = scope("de");
+        for name in ["Sketch3", "Source` comes after this sketch {name}"] {
+            let message = format!(
+                "sketch `{name}` comes after this sketch in the timeline, so its geometry cannot be used here. Move the source sketch earlier if its dependencies allow, or use a sketch after it."
+            );
+            let expected = format!(
+                "Die Skizze `{name}` liegt in der Zeitleiste nach dieser Skizze. Ihre Geometrie kann hier daher nicht verwendet werden. Verschiebe die Quellskizze nach vorne, wenn ihre Abhängigkeiten dies erlauben, oder verwende eine Skizze, die nach ihr liegt."
+            );
+            assert_eq!(super::tr_engine_error(&message), expected);
+            for command in ["sketch.project", "sketch.intersect", "sketch.include_3d"] {
+                assert_eq!(super::tr_engine_error(&format!("invalid parameters for `{command}`: {message}")), expected, "{command}");
+            }
+            let unknown = format!("sketch `{name}` is unavailable for another reason");
+            assert_eq!(super::tr_engine_error(&unknown), unknown);
+        }
     }
 
     #[test]
@@ -532,6 +576,39 @@ mod tests {
             assert_ne!(translated, message, "{language}");
             // Right-to-left text comes back in display order, so only what it holds is checked.
             assert!(translated.contains("Fillet {2}") && translated.contains("`F4:side:c1#1|F4:top`"), "{language}: {translated}");
+        }
+    }
+
+    #[test]
+    fn stitch_open_edges_diagnostic_preserves_names_counts_and_other_warnings() {
+        install();
+        for body in ["A", "Plate ` {body} {count}", "Plate` remains open (boundary edges: 2). {body}"] {
+            for (before, after) in [("", ""), ("surface.stitch: ", "; another warning")] {
+                let message = format!("{before}Stitch result `{body}` remains open (boundary edges: 14).{after}");
+                assert_eq!(Locale::for_language("en").diagnostic(&message), message);
+                for language in ["ar", "de", "he", "ja", "ko", "vi", "zh"] {
+                    let translated = Locale::for_language(language).diagnostic(&message);
+                    assert_ne!(translated, message, "{language}");
+                    assert!(translated.contains(body) && translated.contains("14"), "{language}: {translated}");
+                    assert!(translated.starts_with(before) && translated.ends_with(after), "{language}: {translated}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stitch_open_edges_diagnostic_leaves_malformed_lookalikes_unchanged() {
+        install();
+        for count in ["", "0", "-1", "+14", "1.5", " 14", "14 ", "١٤", "184467440737095516160"] {
+            let message = format!("Stitch result `A` remains open (boundary edges: {count}).");
+            assert_eq!(Locale::for_language("ja").diagnostic(&message), message);
+        }
+        for message in [
+            "Stitch result `` remains open (boundary edges: 14).",
+            "Stitch result `A` remains open (boundary edges: 14)",
+            "Stitch result `A` remains open (boundary edges: 14.5).",
+        ] {
+            assert_eq!(Locale::for_language("ja").diagnostic(message), message);
         }
     }
 
@@ -1139,6 +1216,8 @@ mod tests {
         assert_eq!(ja.dynamic("Precision: 3"), "精度: 3");
         assert_eq!(ja.dynamic("Parameters (5)"), "パラメータ (5)");
         assert_eq!(ja.dynamic("4 degrees of freedom"), "自由度 4");
+        assert_eq!(ja.dynamic("Section 2"), "断面 2");
+        assert_eq!(ja.dynamic("Section View"), ja.label("Section View"), "a label, not a numbered section plane");
         assert_eq!(ja.dynamic("Sketch of bracket"), "Sketch of bracket");
         assert_eq!(Locale::for_language("en").dynamic("Sketch1"), "Sketch1");
     }
