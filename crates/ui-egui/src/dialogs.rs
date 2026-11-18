@@ -3651,7 +3651,20 @@ fn missing_pick(error: &str) -> bool {
 /// A refusal that is guidance, not a failure of the design, so the dialog offers nothing to
 /// report (#10181): the command is not available here, or the pick is in the sketch already.
 fn context_refusal(app: &SolveApp, d: &Dialog, error: &str) -> bool {
-    already_linked(error) || command_disabled(app, d, error)
+    already_linked(error) || command_disabled(app, d, error) || held_read_only(error)
+}
+
+/// The embedding host's read-only refusal ([`solidcraft_engine::read_only`], an expired licence)
+/// of any command the dialog ran (its own, or one its options or edits run): the host's reason,
+/// nothing to report.
+fn held_read_only(error: &str) -> bool {
+    solidcraft_engine::read_only::reason().is_some_and(|why| refused_for(error, &why))
+}
+
+/// `error` is a command's refusal in this context (`EngineError::Disabled`) for `why`.
+fn refused_for(error: &str, why: &str) -> bool {
+    let id = error.strip_prefix('`').and_then(|rest| rest.split_once('`')).map(|(id, _)| id);
+    id.is_some_and(|id| error == solidcraft_engine::EngineError::Disabled(id.to_string(), why.to_string()).to_string())
 }
 
 /// Project's or Intersect's refusal of a pick the sketch already holds ("already intersected into
@@ -3767,11 +3780,12 @@ fn error_rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: &mut 
                             ui.ctx().copy_text(error.clone());
                         }
                     }
-                    // A value the field flags is the user's to change, not a failure to report.
-                    if matches!(plain, Some(FilletRefusal::InField)) {
+                    // A value the field flags is the user's to change, not a failure to report;
+                    // a host product takes reports its own way (`brand`).
+                    if matches!(plain, Some(FilletRefusal::InField)) || !crate::brand::own_report_flow() {
                         return;
                     }
-                    let response = crate::ui_kit::button(ui, "Create Issue…", crate::ui_kit::Button::Normal);
+                    let response = crate::ui_kit::button(ui, solidcraft_ui_text::tr_label("Create Issue…"), crate::ui_kit::Button::Normal);
                     crate::scenario::publish_handle("dialog:create_issue", response.rect.center());
                     if response.clicked() {
                         crate::issue_report::begin(app, ctx, Some(d), Some(&error));
@@ -3859,7 +3873,7 @@ fn reveal_refusal(on_ok: bool, typing: bool, shown: Option<&str>, error: &str) -
 /// message is in the catalogs.
 fn shown_error(error: &str) -> String {
     let msg = error.strip_prefix("invalid parameters for `").and_then(|rest| rest.split_once("`: ")).map_or(error, |(_, msg)| msg);
-    crate::i18n::tr_diagnostic(solidcraft_ui_text::tr_label(msg))
+    crate::i18n::tr_diagnostic(&crate::i18n::tr_engine_error(solidcraft_ui_text::tr_label(msg)))
 }
 
 /// Find the Boundary Fill cells again when the tool bodies changed (keeping the choices of
@@ -9573,6 +9587,23 @@ mod right_click_tests {
         right_click(&mut h, json!({"world": [25, 15, 20]}));
         assert!(h.app.viewport.context_menu.is_some());
         assert!(hint(&h).is_none());
+    }
+}
+
+#[cfg(test)]
+mod held_read_only_tests {
+    use super::refused_for;
+
+    /// The host's read-only refusal of whichever command a dialog ran offers nothing to report;
+    /// a refusal for another reason, or another error naming the reason, is not taken for it.
+    #[test]
+    fn only_the_hosts_reason_is_taken_for_its_refusal() {
+        let why = "试用已结束";
+        assert!(refused_for("`solid.box` is not available right now: 试用已结束", why));
+        assert!(refused_for("`sketch.trim` is not available right now: 试用已结束", why));
+        assert!(!refused_for("`sketch.project` is not available right now: no sketch is being edited", why));
+        assert!(!refused_for("`solid.box` failed: 试用已结束", why));
+        assert!(!refused_for("试用已结束", why));
     }
 }
 

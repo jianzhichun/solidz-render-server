@@ -1,7 +1,7 @@
 # Build the render-server (apps/solidcraft-render-server) for macOS (Apple silicon) and Windows (x64) on GitHub-hosted runners.
 # Runs on pushes to main or by hand (artifacts only), and on a pushed tag render-server-v<version>, which also publishes a
 # GitHub Release. <version> is the SolidCraft version the program is built from, optionally with a build number:
-# render-server-v0.42.0, render-server-v0.42.0-2. The binary must report that SolidCraft version or nothing is released.
+# render-server-v0.44.1, render-server-v0.44.1-2. The binary must report that SolidCraft version or nothing is released.
 # Release assets (stable names; each archive holds one folder with the binary, <binary>.sha256 and the licence files):
 #   solidcraft-render-server-<version>-macos-arm64.tar.gz
 #   solidcraft-render-server-<version>-windows-x64.zip
@@ -92,7 +92,7 @@ jobs:
           COPYFILE_DISABLE: '1'
         run: |
           exe=solidcraft-render-server${{ matrix.exe }}
-          said=$("target/release/$exe" --version 2>&1)        # "solidcraft-render-server 0.42.0 (protocol 1)"
+          said=$("target/release/$exe" --version 2>&1)        # "solidcraft-render-server 0.44.1 (protocol 1)"
           upstream=$(echo "$said" | awk '{print $2}')
           if [[ "$GITHUB_REF" == refs/tags/render-server-v* ]]; then
             version=${GITHUB_REF_NAME#render-server-v}

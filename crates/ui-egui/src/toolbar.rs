@@ -719,6 +719,14 @@ pub(crate) fn export(app: &mut SolveApp, ext: &str) {
 /// does what that File › Export item does: STEP, OBJ and URDF ask where to save, STL and 3MF
 /// open the mesh dialog with the format chosen. `false`: `id` is no such command.
 pub(crate) fn start_export(app: &mut SolveApp, id: &str) -> bool {
+    // Export itself (command search) asks where to save and in which format, as the browser's
+    // Export… does; run as it was, it only said that `path` is required.
+    if id == "file.export" {
+        if FileAction::Export("step").enabled(app) {
+            export_in(app, EXPORT_EXTENSIONS, None);
+        }
+        return true;
+    }
     let (extension, mesh) = match id {
         "file.export_step" => ("step", false),
         "file.export_obj" => ("obj", false),
@@ -739,19 +747,27 @@ pub(crate) fn start_export(app: &mut SolveApp, id: &str) -> bool {
     true
 }
 
+/// The extensions `file.export` writes, the first one offered.
+pub(crate) const EXPORT_EXTENSIONS: &[&str] = &["step", "stp", "igs", "stl", "3mf", "obj", "glb"];
+
 /// Export to a file with extension `ext`, in `format` when the extension alone doesn't name it.
 fn export_as(app: &mut SolveApp, ext: &str, format: Option<&str>) {
+    export_in(app, &[ext], format);
+}
+
+/// Export to a file with one of `exts` (the first offered).
+fn export_in(app: &mut SolveApp, exts: &[&str], format: Option<&str>) {
     let body = crate::export_name::first_body(app);
-    let name = format!("{}.{ext}", crate::export_name::offered(app, body.as_deref(), &app.session.doc.name));
+    let name = format!("{}.{}", crate::export_name::offered(app, body.as_deref(), &app.session.doc.name), exts[0]);
     let format = format.map(str::to_string);
-    app.pick_save(&name, &[ext], move |app, path| {
+    app.pick_save(&name, exts, move |app, path| {
         let Some(path) = path else { return };
         let mut params = json!({"path": path});
         if let Some(format) = format {
             params["format"] = json!(format);
         }
         if app.run("file.export", params).is_ok() {
-            app.set_status(format!("Exported {path}"), false);
+            app.set_status(solidcraft_ui_text::format("ui.exported_to", &[("path", &path)]), false);
         }
     });
 }

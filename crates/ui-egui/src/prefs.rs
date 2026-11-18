@@ -3840,7 +3840,11 @@ fn button_jobs_that_read<'de, D: serde::Deserializer<'de>>(
 fn theme_choices(app: &SolveApp) -> Vec<(String, String)> {
     let modes =
         THEMES.iter().filter(|(id, _)| *id != "system").map(|(id, label)| ((*id).to_string(), solidcraft_ui_text::tr_label(label).to_string()));
-    let files = crate::theme_files::builtin().iter().chain(&app.preferences.custom_themes).map(|t| (t.id.clone(), t.name.clone()));
+    // A built-in theme named after SolidCraft ("SolidCraft 95") says the product a host named (`brand`).
+    let files = crate::theme_files::builtin()
+        .iter()
+        .chain(&app.preferences.custom_themes)
+        .map(|t| (t.id.clone(), solidcraft_ui_text::branded(&t.name).into_owned()));
     let mut choices: Vec<_> = modes.chain(files).collect();
     choices.sort_by_key(|(id, _)| match id.as_str() {
         "light" => 0,
