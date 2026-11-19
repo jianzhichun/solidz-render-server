@@ -208,8 +208,7 @@ pub fn tr_name(text: &str) -> String {
     solidcraft_ui_text::locale().given_name(text)
 }
 pub fn tr_diagnostic(text: &str) -> String {
-    // The engine's messages name the product as the catalogs do (`solidcraft_ui_text::branded`).
-    solidcraft_ui_text::branded(&solidcraft_ui_text::locale().diagnostic(text)).into_owned()
+    solidcraft_ui_text::locale().diagnostic(text)
 }
 
 /// The id of an offset curve an engine error names at the start, `` `{id}` ``.
@@ -235,6 +234,15 @@ pub fn tr_engine_error(error: &str) -> String {
     use solidcraft_ui_text::{format, tr};
     // `EngineError::BadParams` carries `invalid parameters for `<command>`: ` in front.
     let text = error.strip_prefix("invalid parameters for `").and_then(|rest| rest.split_once("`: ")).map_or(error, |(_, text)| text);
+    for (english, id) in [
+        ("Boundary Fill cell points must be away from tool boundaries", "boundary_fill.error.boundary_point"),
+        ("Boundary Fill needs closed solid tools; open surface and mesh tools are not supported", "boundary_fill.error.closed_tools"),
+        ("Boundary Fill did not produce a closed solid cell", "boundary_fill.error.open_cell"),
+    ] {
+        if text == english {
+            return tr(id).to_string();
+        }
+    }
     if let Some((name, ids)) = text
         .strip_prefix("ambiguous component `")
         .and_then(|rest| rest.strip_suffix("; use a numeric component ID"))
@@ -288,25 +296,7 @@ pub fn tr_engine_error(error: &str) -> String {
     if let Some(id) = point_error_id(text, "fixed") {
         return format("sketch.error.point_is_fixed", &[("id", id)]);
     }
-    if let Some((command, reason)) = not_available(text) {
-        return format("command.error.not_available", &[("command", &command), ("reason", solidcraft_ui_text::tr_label(reason))]);
-    }
-    if let Some(name) = text.strip_prefix('`').and_then(|rest| rest.strip_suffix("` is required")).filter(|name| !name.contains('`')) {
-        return format("command.error.required", &[("name", name)]);
-    }
     error.to_string()
-}
-
-/// A command refused in this context (`EngineError::Disabled`): "`{id}` is not available right
-/// now: {reason}", or with the command's label in place of `` `{id}` `` (as [`crate::friendly_error`]
-/// has it). → the command's label in the interface language, and the reason.
-fn not_available(text: &str) -> Option<(String, &str)> {
-    let (subject, reason) = text.split_once(" is not available right now: ")?;
-    let command = match subject.strip_prefix('`').and_then(|rest| rest.strip_suffix('`')) {
-        Some(id) => solidcraft_ui_text::tr_label(crate::command_label(id)).to_string(),
-        None => subject.to_string(),
-    };
-    Some((command, reason))
 }
 
 /// Interface direction follows the selected catalog, including English fallback.
@@ -341,6 +331,22 @@ mod tests {
     }
 
     #[test]
+    fn a_plugin_failure_is_worded_from_the_catalog_and_the_cli_english_matches_it() {
+        use solidcraft_engine::plugin::{PluginFailure, messages::MESSAGES};
+        install();
+        for (id, english) in MESSAGES {
+            assert_eq!(Locale::for_language("en").text(id), *english, "{id}: the engine's English is the catalog's");
+        }
+        let failure = PluginFailure {
+            plugin: "Dutchman".into(),
+            file: Some("cube.f3d".into()),
+            error: solidcraft_engine::plugin::HostError::OverCeiling { limit: "memory_mib".into(), requested: 2048, allowed: 128 },
+        };
+        let _scope = scope("de");
+        assert!(failure.text().starts_with("Dutchman konnte cube.f3d nicht öffnen: Es verlangt 2048 MiB Arbeitsspeicher, Plugins dürfen 128 MiB"));
+    }
+
+    #[test]
     fn component_ambiguity_is_translated_without_truncating_names() {
         install();
         let _scope = scope("de");
@@ -350,6 +356,23 @@ mod tests {
         assert_eq!(super::tr_engine_error(&message), expected);
         assert_eq!(super::tr_engine_error(&format!("invalid parameters for `component.delete`: {message}")), expected);
         assert_eq!(super::tr_engine_error("another error"), "another error");
+    }
+
+    #[test]
+    fn boundary_fill_refusals_are_translated() {
+        install();
+        let _scope = scope("de");
+        for (english, id) in [
+            ("Boundary Fill cell points must be away from tool boundaries", "boundary_fill.error.boundary_point"),
+            ("Boundary Fill needs closed solid tools; open surface and mesh tools are not supported", "boundary_fill.error.closed_tools"),
+            ("Boundary Fill did not produce a closed solid cell", "boundary_fill.error.open_cell"),
+        ] {
+            assert_eq!(Locale::for_language("en").text(id), english);
+            let expected = Locale::for_language("de").text(id);
+            assert_ne!(expected, english);
+            assert_eq!(super::tr_engine_error(english), expected);
+            assert_eq!(super::tr_engine_error(&format!("invalid parameters for `solid.boundary_fill`: {english}")), expected);
+        }
     }
 
     #[test]
@@ -384,19 +407,6 @@ mod tests {
         );
         assert_eq!(super::tr_engine_error("point `origin` is fixed and cannot move"), "Der Punkt `origin` ist fest und kann nicht verschoben werden");
         assert_eq!(super::tr_engine_error("another error"), "another error");
-    }
-
-    /// A command refused in this context, and a parameter left out, read in the interface
-    /// language: the command by its label, the reason the engine gave as it was given.
-    #[test]
-    fn a_refused_command_and_a_missing_parameter_are_translated() {
-        install();
-        let _scope = scope("zh");
-        let label = tr_label(crate::command_label("solid.box")).to_string();
-        assert_eq!(super::tr_engine_error("`solid.box` is not available right now: 试用已结束"), format!("{label}当前不可用：试用已结束"));
-        assert_eq!(super::tr_engine_error(&format!("{label} is not available right now: 试用已结束")), format!("{label}当前不可用：试用已结束"));
-        assert_eq!(super::tr_engine_error("invalid parameters for `file.export`: `path` is required"), "缺少 `path`");
-        assert_eq!(super::tr_engine_error("`a` or `b` is required"), "`a` or `b` is required", "only one parameter is named");
     }
 
     #[test]
@@ -870,6 +880,7 @@ mod tests {
             include_str!("documents.rs"),
             include_str!("dialogs.rs"),
             include_str!("browser.rs"),
+            include_str!("browser_search.rs"),
             include_str!("sketch_palette.rs"),
             include_str!("design_properties.rs"),
             include_str!("home.rs"),
@@ -1619,6 +1630,7 @@ mod tests {
         KitCall { name: "search_field", args: &[3], id: false, trim: &[] },
         KitCall { name: "menu_filter", args: &[3], id: false, trim: &[] },
         KitCall { name: "placement_field", args: &[3], id: false, trim: &[] },
+        KitCall { name: "canvas_value_field", args: &[4], id: false, trim: &[] },
         KitCall { name: "library_cell", args: &[3], id: false, trim: &[] },
         // actions.rs
         KitCall { name: "icon_button_at", args: &[3], id: false, trim: &[] },

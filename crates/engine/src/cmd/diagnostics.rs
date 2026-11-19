@@ -45,6 +45,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              (offline) or failed",
         ),
     CommandSpec::new("diagnostics.crash_reports", "Crash Reports", crate::checked!("diagnostics.crash_reports", list))
+        .any_part()
         .icon("bug_report")
         .noundo()
         .contract(&LIST_CONTRACT)
@@ -55,6 +56,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              Read one with diagnostics.crash_report; reproduce it with `solidcraft-cli crashes replay <id>`",
         ),
     CommandSpec::new("diagnostics.crash_report", "Crash Report", crate::checked!("diagnostics.crash_report", read))
+        .any_part()
         .icon("bug_report")
         .noundo()
         .contract(&READ_CONTRACT)
@@ -65,12 +67,14 @@ pub static COMMANDS: &[CommandSpec] = &[
              (`solidcraft-cli run <replay_path> --in <design_path>`)",
         ),
     CommandSpec::new("diagnostics.crash_reports.clear", "Delete Crash Reports", crate::checked!("diagnostics.crash_reports.clear", clear))
+        .any_part()
         .icon("delete")
         .noundo()
         .contract(&CLEAR_CONTRACT)
         .output(output_schema_for::<CrashReportsCleared>)
         .params("id?: one report (default: all). Returns {deleted}"),
     CommandSpec::new("diagnostics.profile", "Profile", crate::checked!("diagnostics.profile", profile))
+        .any_part()
         .icon("bug_report")
         .noundo()
         .contract(&PROFILE_CONTRACT)
@@ -86,6 +90,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              --profile and the app's preference; off, it costs nothing measurable. Read-only",
         ),
     CommandSpec::new("diagnostics.validation", "Validation", crate::checked!("diagnostics.validation", validation))
+        .any_part()
         .icon("bug_report")
         .noundo()
         .contract(&VALIDATION_CONTRACT)
@@ -98,6 +103,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              The app's preference of the same name sets it. Returns {mode, previous}",
         ),
     CommandSpec::new("diagnostics.crash_test", "Crash Test", crate::checked!("diagnostics.crash_test", crash_test))
+        .any_part()
         .icon("bug_report")
         .noundo()
         .enabled(crash_test_enabled)
@@ -236,10 +242,6 @@ fn profile(_: &mut Session, p: &Value) -> Result<Value> {
 
 fn report_issue(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "diagnostics.report_issue";
-    // A host that takes problem reports its own way: nothing is gathered, queued or sent.
-    if let Some(why) = crate::report_issue::refusal() {
-        return Err(EngineError::Disabled(cmd.to_string(), why));
-    }
     let title = str_(p, "title").map(str::trim).unwrap_or_default();
     if title.is_empty() {
         return Err(bad(cmd, "`title` is required: a short title for the problem"));

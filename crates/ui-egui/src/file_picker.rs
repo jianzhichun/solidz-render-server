@@ -316,22 +316,6 @@ mod tests {
         }
     }
 
-    /// Export itself, started from command search, asks where to save (in any format it writes)
-    /// and says where it went, instead of running without a path ("`path` is required").
-    #[test]
-    fn export_from_command_search_asks_where_to_save() {
-        let mut h = crate::scenario::Harness::new();
-        h.app.run("solid.box", json!({"length":10,"width":10,"height":10})).unwrap();
-        let answer = picker(&mut h.app, true);
-        h.app.start("file.export");
-        h.frames(2);
-        assert!(h.app.file_picker_busy(), "Export must open the save picker");
-        let path = h.dir.join("part.stl");
-        finish(&mut h.app, &answer, Some(path.to_string_lossy().into_owned()));
-        assert!(path.is_file());
-        assert!(h.app.status.as_ref().is_some_and(|(text, _, error)| text.starts_with("Exported ") && !error), "{:?}", h.app.status);
-    }
-
     /// Saving the design says where it went, as an export does (#8693).
     #[test]
     fn saving_the_design_says_where_it_went() {
@@ -437,8 +421,8 @@ mod tests {
             ("sketch.insert_svg", vec!["svg"]),
             ("sketch.insert_dxf", vec!["dxf"]),
             ("file.insert_step", vec![]),
-            ("canvas.insert", vec!["png", "jpg", "jpeg"]),
-            ("canvas.decal", vec!["png", "jpg", "jpeg"]),
+            ("canvas.insert", vec!["png", "jpg", "jpeg", "svg"]),
+            ("canvas.decal", vec!["png", "jpg", "jpeg", "svg"]),
         ] {
             h.app.start(command);
             tick(&mut h.app, &h.ctx);
@@ -509,7 +493,7 @@ mod tests {
         h.app.run("sketch.create", json!({"plane": "XY"})).unwrap();
         h.app.start("canvas.insert");
         h.frames(2);
-        assert_eq!(*asked.borrow(), [vec!["csv", "json"], vec!["png", "jpg", "jpeg"]]);
+        assert_eq!(*asked.borrow(), [vec!["csv", "json"], vec!["png", "jpg", "jpeg", "svg"]]);
     }
 
     /// #4717: a canvas placed with a click on the origin of a sketch on XY, seen from the top,

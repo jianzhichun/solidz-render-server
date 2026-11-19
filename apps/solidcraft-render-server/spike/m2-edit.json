@@ -1,7 +1,0 @@
-[
-  {"frame":5,"events":[{"e":"focus","focused":true},{"e":"move","x":85,"y":294}]},
-  {"frame":6,"events":[{"e":"button","x":85,"y":294,"button":"primary","pressed":true,"mods":{"alt":false,"ctrl":false,"shift":false,"meta":false}}]},
-  {"frame":7,"events":[{"e":"button","x":85,"y":294,"button":"primary","pressed":false,"mods":{"alt":false,"ctrl":false,"shift":false,"meta":false}}]},
-  {"frame":10,"events":[{"e":"key","key":"Delete","physical":"Delete","pressed":true,"repeat":false,"mods":{"alt":false,"ctrl":false,"shift":false,"meta":false}}]},
-  {"frame":11,"events":[{"e":"key","key":"Delete","physical":"Delete","pressed":false,"repeat":false,"mods":{"alt":false,"ctrl":false,"shift":false,"meta":false}}]}
-]

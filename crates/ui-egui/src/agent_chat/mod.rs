@@ -185,7 +185,7 @@ fn decode_picture(bytes: &[u8]) -> Option<egui::ColorImage> {
     limits.max_image_height = Some(20_000);
     limits.max_alloc = Some(1 << 30);
     reader.limits(limits);
-    let rgba = reader.decode().ok()?.to_rgba8();
+    let rgba = solidcraft_engine::upright_image::decode_upright(reader).ok()?.0.to_rgba8();
     let size = [usize::try_from(rgba.width()).ok()?, usize::try_from(rgba.height()).ok()?];
     Some(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
 }
@@ -1122,8 +1122,7 @@ enum Outcome {
 
 /// The AI features are on (the master switch in Settings → AI) and this is the desktop app.
 pub fn shown(app: &SolveApp) -> bool {
-    // Not where the host refuses it (`brand::refuse_commands`): no panel, button or key.
-    app.preferences.ai_features && cfg!(not(target_arch = "wasm32")) && crate::brand::refused("ui.assistant").is_none()
+    app.preferences.ai_features && cfg!(not(target_arch = "wasm32"))
 }
 
 /// The Assistant button in the application bar is shown (honours the existing preference).
@@ -1226,10 +1225,6 @@ fn working_dir() -> std::path::PathBuf {
 /// Start the agent: the chat's control endpoint for its MCP bridge if needed, the process.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
-    // No agent starts where the Assistant is not shown (the host refuses it), whoever asks.
-    if !shown(app) {
-        return;
-    }
     disconnect(app);
     let Some(entry) = agents::current(app) else {
         let chat = &mut app.agent_chat;
@@ -2131,7 +2126,10 @@ pub fn approve_always(app: &mut SolveApp, id: u64) {
     });
     if let Some(tool) = tool {
         let agent = app.agent_chat.running_id.clone();
-        agents::remember(&mut app.preferences, &agent, &tool);
+        // A batch's card holds one line per command that asked: each is remembered on its own.
+        for key in tool.lines().filter(|k| !k.is_empty()) {
+            agents::remember(&mut app.preferences, &agent, key);
+        }
     }
     approve(app, id, true);
 }
@@ -2266,7 +2264,8 @@ fn merge_turn(undo: &mut Vec<solidcraft_engine::Snapshot>, turn: &Turn) -> usize
 }
 
 /// Merge the undo steps made since `start_doc` (with the history at `start`) into one, labelled
-/// `label`; how many steps it took in (0: none were made, or the history no longer reaches that far).
+/// `label`; how many steps it took in (0: none were made, the history no longer reaches that far, or
+/// they changed several parts of the design, whose steps are each undone in their own part).
 fn merge_undo(
     undo: &mut Vec<solidcraft_engine::Snapshot>,
     start_doc: &Arc<solidcraft_engine::doc::Document>,
@@ -2288,6 +2287,10 @@ fn merge_undo(
     let Some(first) = first.filter(|&f| f < undo.len()) else {
         return 0;
     };
+    let part = undo.get(first).map(|s| s.part);
+    if undo.iter().skip(first).any(|s| Some(s.part) != part) {
+        return 0;
+    }
     let steps = undo.len() - first;
     // The merged step brings back the section as it was before the first step that changed it.
     let section = undo.get(first..).and_then(|merged| merged.iter().find_map(|s| s.section.clone()));
@@ -2345,9 +2348,19 @@ fn pump_tools(app: &mut SolveApp) {
         let mode = agents::mode_for(&app.preferences, &app.agent_chat.running_id);
         let tool = gate::tool_key(&req.method, &req.params);
         let always = agents::always_allowed(&app.preferences, &app.agent_chat.running_id, &tool);
-        // A plugin's code runs only on the user's Allow, alone or as a batch's step.
-        let plugin_run = gate::runs_plugin(&req.method, &req.params);
-        let verdict = match gate::request(&req.method, &req.params, undo_left) {
+        // Plugin runs, named tools and importers ask in every mode, alone or as a batch step.
+        let plugin_run = gate::runs_plugin(&req.method, &req.params) || crate::plugins::runs_plugin_code(&app.session, &req.method, &req.params);
+        let judged = gate::request(&req.method, &req.params, undo_left);
+        // A question the gate asks is covered only by answers for each command that asks it (a
+        // batch's file steps by their own ids), never by an answer for some other batch.
+        let (tool, always) = if matches!(judged, gate::Verdict::Ask(_)) {
+            let keys = gate::asking_keys(&req.method, &req.params, undo_left);
+            let always = keys.iter().all(|k| agents::always_allowed(&app.preferences, &app.agent_chat.running_id, k));
+            (keys.join("\n"), always)
+        } else {
+            (tool, always)
+        };
+        let verdict = match judged {
             gate::Verdict::Ask(_) if !plugin_run && (mode == agents::Mode::All || always) => gate::Verdict::Run { change: true },
             gate::Verdict::Run { change: true } if mode == agents::Mode::Ask && !always => {
                 gate::Verdict::Ask(gate::describe(&req.method, &req.params))
@@ -2818,10 +2831,6 @@ fn set_config_option_checked(app: &mut SolveApp, id: &str, value: &str, listed_o
 /// `permission` (an option id, or `"cancel"`), `approve` (`true`/`false`, the oldest held
 /// request), `cancel` (Stop), `send_now` (steer: stop, then send the queue), `remove_pending` (index), `undo` (the newest message's changes); returns the panel's state.
 pub fn control(app: &mut SolveApp, ctx: &egui::Context, p: &Value) -> Result<Value, String> {
-    // The host refuses the Assistant: nothing here may turn it on, add an agent or start one.
-    if let Some(refused) = crate::brand::refusal("ui.assistant") {
-        return Err(refused);
-    }
     if let Some(e) = p.get("features").and_then(Value::as_bool) {
         app.preferences.ai_features = e;
     }

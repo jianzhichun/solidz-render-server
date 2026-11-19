@@ -57,10 +57,6 @@ fn policy_line(app: &SolveApp) -> String {
 /// Whether a Help menu item can run now: behind an open bug report, the items that open a
 /// window would cover it (#7188). Report an Issue… shows the report.
 pub fn available(app: &SolveApp, item: &str) -> bool {
-    // A host product offers its own pages, reports and updates (`brand`).
-    if crate::brand::hosted() && crate::brand::leads_to_solidcraft(item) {
-        return false;
-    }
     app.issue_report.draft.is_none() || !matches!(item, "about" | "shortcuts" | "messages" | "crashes" | "connect" | "updates")
 }
 
@@ -129,7 +125,7 @@ fn connect(app: &mut SolveApp, ctx: &egui::Context) {
     let (closed, action) =
         ui_kit::Window::new(egui::Id::unique("sc_connect_assistants"), "help", solidcraft_ui_text::tr_label("Connect AI assistants"))
             .cards(2.0)
-            .actions("", "Close", None)
+            .actions("", "ui.close", None)
             .show(ctx, true, |ui| {
                 ui_kit::text(
                     ui,
@@ -170,7 +166,6 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context, anchor: egui::Pos2) {
                     ]
                     .into_iter()
                     .filter(|(id, ..)| *id != "install_cli" || cfg!(target_os = "macos"))
-                    .filter(|(id, ..)| !crate::brand::hosted() || !crate::brand::leads_to_solidcraft(id))
                     {
                         let item = crate::ui_kit::Item::action(id, label, icon).on_if(available(app, id));
                         if crate::ui_kit::menu::list_row(ui, &item).is_some() {
@@ -184,12 +179,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context, anchor: egui::Pos2) {
                             }
                         }
                     }
-                    // Support and community: always here, whether or not the status bar shows their buttons
-                    // (SolidCraft's own: not under a host product's name).
-                    if !crate::brand::hosted() {
-                        crate::ui_kit::Menu::separator(ui);
-                    }
-                    for link in crate::links::LINKS.iter().filter(|_| !crate::brand::hosted()) {
+                    // Support and community: always here, whether or not the status bar shows their buttons.
+                    crate::ui_kit::Menu::separator(ui);
+                    for link in crate::links::LINKS {
                         let item = crate::ui_kit::Item::action(link.id, solidcraft_ui_text::tr(link.menu), link.icon);
                         if crate::ui_kit::menu::list_row(ui, &item).is_some() {
                             pick = Some(link.id);
@@ -238,7 +230,7 @@ fn about(app: &mut SolveApp, ctx: &egui::Context) {
             );
             crate::policy::note(app, ui, "about:managed");
             ui.horizontal(|ui| {
-                for link in crate::links::LINKS.iter().filter(|_| !crate::brand::hosted()) {
+                for link in crate::links::LINKS {
                     let button = ui_kit::button(ui, solidcraft_ui_text::tr(link.label), ui_kit::Button::Normal).backing_on_hover_text(link.url);
                     crate::scenario::publish_target(&format!("about:{}", link.id), button.rect);
                     if button.clicked() {
