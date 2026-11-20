@@ -208,7 +208,8 @@ pub fn tr_name(text: &str) -> String {
     solidcraft_ui_text::locale().given_name(text)
 }
 pub fn tr_diagnostic(text: &str) -> String {
-    solidcraft_ui_text::locale().diagnostic(text)
+    // The engine's messages name the product as the catalogs do (`solidcraft_ui_text::branded`).
+    solidcraft_ui_text::branded(&solidcraft_ui_text::locale().diagnostic(text)).into_owned()
 }
 
 /// The id of an offset curve an engine error names at the start, `` `{id}` ``.
@@ -296,7 +297,25 @@ pub fn tr_engine_error(error: &str) -> String {
     if let Some(id) = point_error_id(text, "fixed") {
         return format("sketch.error.point_is_fixed", &[("id", id)]);
     }
+    if let Some((command, reason)) = not_available(text) {
+        return format("command.error.not_available", &[("command", &command), ("reason", solidcraft_ui_text::tr_label(reason))]);
+    }
+    if let Some(name) = text.strip_prefix('`').and_then(|rest| rest.strip_suffix("` is required")).filter(|name| !name.contains('`')) {
+        return format("command.error.required", &[("name", name)]);
+    }
     error.to_string()
+}
+
+/// A command refused in this context (`EngineError::Disabled`): "`{id}` is not available right
+/// now: {reason}", or with the command's label in place of `` `{id}` `` (as [`crate::friendly_error`]
+/// has it). → the command's label in the interface language, and the reason.
+fn not_available(text: &str) -> Option<(String, &str)> {
+    let (subject, reason) = text.split_once(" is not available right now: ")?;
+    let command = match subject.strip_prefix('`').and_then(|rest| rest.strip_suffix('`')) {
+        Some(id) => solidcraft_ui_text::tr_label(crate::command_label(id)).to_string(),
+        None => subject.to_string(),
+    };
+    Some((command, reason))
 }
 
 /// Interface direction follows the selected catalog, including English fallback.
@@ -407,6 +426,19 @@ mod tests {
         );
         assert_eq!(super::tr_engine_error("point `origin` is fixed and cannot move"), "Der Punkt `origin` ist fest und kann nicht verschoben werden");
         assert_eq!(super::tr_engine_error("another error"), "another error");
+    }
+
+    /// A command refused in this context, and a parameter left out, read in the interface
+    /// language: the command by its label, the reason the engine gave as it was given.
+    #[test]
+    fn a_refused_command_and_a_missing_parameter_are_translated() {
+        install();
+        let _scope = scope("zh");
+        let label = tr_label(crate::command_label("solid.box")).to_string();
+        assert_eq!(super::tr_engine_error("`solid.box` is not available right now: 试用已结束"), format!("{label}当前不可用：试用已结束"));
+        assert_eq!(super::tr_engine_error(&format!("{label} is not available right now: 试用已结束")), format!("{label}当前不可用：试用已结束"));
+        assert_eq!(super::tr_engine_error("invalid parameters for `file.export`: `path` is required"), "缺少 `path`");
+        assert_eq!(super::tr_engine_error("`a` or `b` is required"), "`a` or `b` is required", "only one parameter is named");
     }
 
     #[test]

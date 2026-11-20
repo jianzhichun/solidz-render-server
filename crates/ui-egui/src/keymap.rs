@@ -378,6 +378,10 @@ pub fn effective(app: &SolveApp, id: &str) -> Option<String> {
 
 /// Every key a command runs from now.
 pub fn keys(app: &SolveApp, id: &str) -> Vec<String> {
+    // A command the host refuses has no key (`brand::refuse_commands`).
+    if crate::brand::refused(id).is_some() {
+        return Vec::new();
+    }
     match app.keymap.custom.get(id) {
         Some(keys) => keys.clone(),
         None => solidcraft_engine::find_command(id).and_then(|c| c.shortcut).filter(|k| !k.is_empty()).map(str::to_string).into_iter().collect(),
@@ -396,6 +400,9 @@ pub(crate) fn drag_zoom_held(app: &SolveApp, input: &egui::InputState) -> bool {
 
 /// Use the spec already available when walking the command list.
 fn keys_for_spec<'a>(app: &'a SolveApp, command: &CommandSpec) -> Vec<&'a str> {
+    if crate::brand::refused(command.id).is_some() {
+        return Vec::new();
+    }
     match app.keymap.custom.get(command.id) {
         Some(keys) => keys.iter().map(String::as_str).collect(),
         None => command.shortcut.filter(|k| !k.is_empty()).into_iter().collect(),
@@ -856,7 +863,7 @@ pub fn page(app: &mut SolveApp, ui: &mut egui::Ui) {
         Some((_, "done")) => stop_capture(app),
         Some((_, "export")) => {
             let text = crate::toolbar_custom::export(app).to_string();
-            app.pick_save("SolidCraft shortcuts.json", &["json"], move |app, path| {
+            app.pick_save(&format!("{} shortcuts.json", solidcraft_ui_text::product_name()), &["json"], move |app, path| {
                 if let Some(path) = path {
                     // Through `vfs`, like every other save: the web app hands it out as a download.
                     app.keymap.message = solidcraft_engine::io::vfs::write(&path, text.as_bytes()).err().map(|e| format!("export: {e}"));
@@ -1063,7 +1070,8 @@ fn shortcut_row(
 fn outcome(app: &SolveApp, ui: &mut egui::Ui) -> Option<&'static str> {
     let mut chosen = None;
     if let Some(m) = &app.keymap.message {
-        ui_kit::text(ui, m, ui_kit::Text::Report("keymap_message", true));
+        // "{key} is used by SolidCraft itself", an import's refusal: the product a host named.
+        ui_kit::text(ui, &solidcraft_ui_text::branded(m), ui_kit::Text::Report("keymap_message", true));
     }
     if let Some((_, key, _, _)) = app.keymap.conflict.clone() {
         ui.horizontal_wrapped(|ui| {

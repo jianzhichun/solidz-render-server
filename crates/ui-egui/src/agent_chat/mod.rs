@@ -1122,7 +1122,8 @@ enum Outcome {
 
 /// The AI features are on (the master switch in Settings → AI) and this is the desktop app.
 pub fn shown(app: &SolveApp) -> bool {
-    app.preferences.ai_features && cfg!(not(target_arch = "wasm32"))
+    // Not where the host refuses it (`brand::refuse_commands`): no panel, button or key.
+    app.preferences.ai_features && cfg!(not(target_arch = "wasm32")) && crate::brand::refused("ui.assistant").is_none()
 }
 
 /// The Assistant button in the application bar is shown (honours the existing preference).
@@ -1225,6 +1226,10 @@ fn working_dir() -> std::path::PathBuf {
 /// Start the agent: the chat's control endpoint for its MCP bridge if needed, the process.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
+    // No agent starts where the Assistant is not shown (the host refuses it), whoever asks.
+    if !shown(app) {
+        return;
+    }
     disconnect(app);
     let Some(entry) = agents::current(app) else {
         let chat = &mut app.agent_chat;
@@ -2831,6 +2836,10 @@ fn set_config_option_checked(app: &mut SolveApp, id: &str, value: &str, listed_o
 /// `permission` (an option id, or `"cancel"`), `approve` (`true`/`false`, the oldest held
 /// request), `cancel` (Stop), `send_now` (steer: stop, then send the queue), `remove_pending` (index), `undo` (the newest message's changes); returns the panel's state.
 pub fn control(app: &mut SolveApp, ctx: &egui::Context, p: &Value) -> Result<Value, String> {
+    // The host refuses the Assistant: nothing here may turn it on, add an agent or start one.
+    if let Some(refused) = crate::brand::refusal("ui.assistant") {
+        return Err(refused);
+    }
     if let Some(e) = p.get("features").and_then(Value::as_bool) {
         app.preferences.ai_features = e;
     }
