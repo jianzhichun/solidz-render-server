@@ -15,6 +15,7 @@ static GERMAN: Catalog = Catalog::new("de", "Deutsch", include_str!(concat!(env!
 /// English in UK spelling: only the messages whose spelling differs; the rest are English's.
 static ENGLISH_UK: Catalog = Catalog::new("en-GB", "English (UK)", include_str!(concat!(env!("OUT_DIR"), "/locales/en-GB.json")));
 static SPANISH: Catalog = Catalog::new("es", "Español (España)", include_str!(concat!(env!("OUT_DIR"), "/locales/es.json")));
+static BASQUE: Catalog = Catalog::new("eu", "Euskara", include_str!(concat!(env!("OUT_DIR"), "/locales/eu.json")));
 static FINNISH: Catalog = Catalog::new("fi", "Suomi", include_str!(concat!(env!("OUT_DIR"), "/locales/fi.json")));
 static FRENCH: Catalog = Catalog::new("fr", "Français", include_str!(concat!(env!("OUT_DIR"), "/locales/fr.json")));
 static GALICIAN: Catalog = Catalog::new("gl", "Galego", include_str!(concat!(env!("OUT_DIR"), "/locales/gl.json")));
@@ -55,6 +56,7 @@ pub const LOCALES: &[&Catalog] = &[
     &GERMAN,
     &ENGLISH_UK,
     &SPANISH,
+    &BASQUE,
     &FINNISH,
     &FRENCH,
     &GALICIAN,
@@ -108,8 +110,9 @@ pub trait LocaleNames {
     /// multi-word Hebrew or Arabic name reads from the right like the interface's own labels (#10471).
     fn given_name(self, text: &str) -> String;
     /// Evaluation errors stay English for scripts; the empty Cut/Intersect hint that names
-    /// another component, a feature's request to reselect a reference it lost, and an open
-    /// Stitch result are translated where they are shown. Other text is returned unchanged.
+    /// another component, a feature's request to reselect a reference it lost, an open Stitch
+    /// result and a profile pick with too many curves are translated where they are shown. Other
+    /// text is returned unchanged.
     fn diagnostic(self, text: &str) -> String;
     /// Translate generated browser names and labels, preserving custom names otherwise.
     fn dynamic(self, text: &str) -> String;
@@ -163,6 +166,11 @@ impl LocaleNames for Locale {
             let message = self.format("diagnostic.stitch_open_edges", &[("body", &body), ("count", count)]);
             return format!("{before}{message}{after}");
         }
+        // A profile pick with more curves than a design keeps track of, after anything naming
+        // the feature or command in front.
+        if let Some(before) = text.strip_suffix(solidcraft_engine::doc::WHOLE_PROFILE_TOO_MANY_CURVES) {
+            return format!("{before}{}", self.text("diagnostic.whole_profile_too_many_curves"));
+        }
         const PREFIX: &str = "there is no body to cut or intersect in component '";
         if let Some((before, detail)) = text.split_once(PREFIX)
             && let Some((component, detail)) = detail.split_once("'; the tool may overlap '")
@@ -208,8 +216,7 @@ pub fn tr_name(text: &str) -> String {
     solidcraft_ui_text::locale().given_name(text)
 }
 pub fn tr_diagnostic(text: &str) -> String {
-    // The engine's messages name the product as the catalogs do (`solidcraft_ui_text::branded`).
-    solidcraft_ui_text::branded(&solidcraft_ui_text::locale().diagnostic(text)).into_owned()
+    solidcraft_ui_text::locale().diagnostic(text)
 }
 
 /// The id of an offset curve an engine error names at the start, `` `{id}` ``.
@@ -297,25 +304,7 @@ pub fn tr_engine_error(error: &str) -> String {
     if let Some(id) = point_error_id(text, "fixed") {
         return format("sketch.error.point_is_fixed", &[("id", id)]);
     }
-    if let Some((command, reason)) = not_available(text) {
-        return format("command.error.not_available", &[("command", &command), ("reason", solidcraft_ui_text::tr_label(reason))]);
-    }
-    if let Some(name) = text.strip_prefix('`').and_then(|rest| rest.strip_suffix("` is required")).filter(|name| !name.contains('`')) {
-        return format("command.error.required", &[("name", name)]);
-    }
     error.to_string()
-}
-
-/// A command refused in this context (`EngineError::Disabled`): "`{id}` is not available right
-/// now: {reason}", or with the command's label in place of `` `{id}` `` (as [`crate::friendly_error`]
-/// has it). → the command's label in the interface language, and the reason.
-fn not_available(text: &str) -> Option<(String, &str)> {
-    let (subject, reason) = text.split_once(" is not available right now: ")?;
-    let command = match subject.strip_prefix('`').and_then(|rest| rest.strip_suffix('`')) {
-        Some(id) => solidcraft_ui_text::tr_label(crate::command_label(id)).to_string(),
-        None => subject.to_string(),
-    };
-    Some((command, reason))
 }
 
 /// Interface direction follows the selected catalog, including English fallback.
@@ -426,19 +415,6 @@ mod tests {
         );
         assert_eq!(super::tr_engine_error("point `origin` is fixed and cannot move"), "Der Punkt `origin` ist fest und kann nicht verschoben werden");
         assert_eq!(super::tr_engine_error("another error"), "another error");
-    }
-
-    /// A command refused in this context, and a parameter left out, read in the interface
-    /// language: the command by its label, the reason the engine gave as it was given.
-    #[test]
-    fn a_refused_command_and_a_missing_parameter_are_translated() {
-        install();
-        let _scope = scope("zh");
-        let label = tr_label(crate::command_label("solid.box")).to_string();
-        assert_eq!(super::tr_engine_error("`solid.box` is not available right now: 试用已结束"), format!("{label}当前不可用：试用已结束"));
-        assert_eq!(super::tr_engine_error(&format!("{label} is not available right now: 试用已结束")), format!("{label}当前不可用：试用已结束"));
-        assert_eq!(super::tr_engine_error("invalid parameters for `file.export`: `path` is required"), "缺少 `path`");
-        assert_eq!(super::tr_engine_error("`a` or `b` is required"), "`a` or `b` is required", "only one parameter is named");
     }
 
     #[test]
@@ -695,6 +671,7 @@ mod tests {
             curves: vec![curve.into()],
             points: Vec::new(),
             name: "F2:side:l1".into(),
+            from: Vec::new(),
         };
         let lost_error = |n: usize| {
             let links = [("j1", "Tray", "l1"), ("j2", "Cover", "l2"), ("j3", "Tray", "l3"), ("j4", "Tray", "l4")];
@@ -724,6 +701,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_profile_pick_with_too_many_curves_reads_in_the_interface_language() {
+        install();
+        let message = format!("solid.extrude: {}", solidcraft_engine::doc::WHOLE_PROFILE_TOO_MANY_CURVES);
+        let english = Locale::for_language("en").diagnostic(&message);
+        assert_eq!(english, format!("solid.extrude: {}", Locale::for_language("en").text("diagnostic.whole_profile_too_many_curves")));
+        assert!(english.contains("Pick fewer profiles"), "{english}");
+        for language in ["ar", "de", "he", "ja", "ko", "pt-BR", "vi", "zh"] {
+            let translated = Locale::for_language(language).diagnostic(&message);
+            assert!(translated.starts_with("solid.extrude: "), "{language}: {translated}");
+            assert_ne!(translated, english, "{language}: the refusal must be translated");
+        }
+    }
+
     /// English first, then by id, so adding a locale edits only its own line.
     #[test]
     fn locales_are_listed_english_first_then_by_id() {
@@ -744,6 +735,62 @@ mod tests {
         assert_eq!(uk.text("ui.design_properties.organization"), "Organisation");
         assert_eq!(uk.text("ui.preferences"), english.text("ui.preferences"));
         assert_eq!(english.label("Center X"), "Center X");
+    }
+
+    /// English is in US spelling (#9194, #13470): no message spells a word the British way,
+    /// and English (UK) still reads the ones it changed in British spelling.
+    #[test]
+    fn english_messages_are_in_us_spelling() {
+        install();
+        // Names keep their own spelling: a font's licence and a filament's colour name.
+        let names = ["Ubuntu Font Licence", "ABS - Grey"];
+        let british = [
+            "centre",
+            "centres",
+            "centred",
+            "colour",
+            "colours",
+            "coloured",
+            "moulding",
+            "modelling",
+            "labelled",
+            "behaviour",
+            "cancelled",
+            "towards",
+            "favourite",
+            "licence",
+            "neighbouring",
+            "millimetres",
+            "modelled",
+            "moulded",
+            "cancelling",
+            "aluminium",
+            "summarises",
+            "recolour",
+            "cancellable",
+        ];
+        let mut found = Vec::new();
+        solidcraft_ui_text::each_english_message(|id, text| {
+            let mut rest = text.to_string();
+            for name in names {
+                rest = rest.replace(name, "");
+            }
+            let words = rest.split(|c: char| !c.is_ascii_alphabetic()).map(str::to_ascii_lowercase);
+            if let Some(word) = words.into_iter().find(|w| british.contains(&w.as_str())) {
+                found.push(format!("{id}: {word}"));
+            }
+        });
+        assert!(found.is_empty(), "British spelling in English: {found:#?}");
+        let uk = Locale::for_language("en-GB");
+        assert_eq!(
+            Locale::for_language("en").text("help.sketch.circle.center"),
+            "Draws a circle from its center and its diameter. Use it for holes, bosses and other round features whose center is known."
+        );
+        assert_eq!(
+            uk.text("help.sketch.circle.center"),
+            "Draws a circle from its centre and its diameter. Use it for holes, bosses and other round features whose centre is known."
+        );
+        assert!(uk.text("refused.face_flat").contains("modelling"), "{}", uk.text("refused.face_flat"));
     }
 
     /// A new design's name, `Untitled`, is a default name like `Sketch1`: it shows translated

@@ -7,9 +7,6 @@
 //! `en` and is the fallback for a message a translation lacks. With nothing installed (or no `en`
 //! catalog among them) every id reads as itself, the language is `en` and no other language is
 //! supported.
-//!
-//! A host that carries SolidCraft inside another product names it once with [`set_product_name`]:
-//! every message then says that name where it says SolidCraft, in every language.
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -21,42 +18,12 @@ pub mod bidi;
 /// A catalog's messages: stable id → text.
 pub type Messages = BTreeMap<String, String>;
 
-/// The product the messages name unless a host names another ([`set_product_name`]).
-pub const PRODUCT_NAME: &str = "SolidCraft";
-
-/// The product a host named, set once before the first message is read.
-static PRODUCT: OnceLock<String> = OnceLock::new();
-
-/// Name the product `name` wherever a message names SolidCraft, in every catalog and in
-/// [`branded`] text. Once per process, before the first message is read (a catalog read earlier
-/// keeps the name it was read with). False when a product was already named.
-pub fn set_product_name(name: &str) -> bool {
-    PRODUCT.set(name.trim().to_string()).is_ok()
-}
-
-/// The product the messages name: SolidCraft, or the one a host named.
-pub fn product_name() -> &'static str {
-    PRODUCT.get().map_or(PRODUCT_NAME, String::as_str)
-}
-
-/// `text` naming the product as the messages do: SolidCraft replaced by the name a host gave,
-/// unchanged otherwise. For text that is not a catalog message (engine errors, copied text).
-pub fn branded(text: &str) -> Cow<'_, str> {
-    match PRODUCT.get() {
-        Some(name) if name != PRODUCT_NAME && text.contains(PRODUCT_NAME) => Cow::Owned(text.replace(PRODUCT_NAME, name)),
-        _ => Cow::Borrowed(text),
-    }
-}
-
-fn parse(catalog: &Catalog) -> Messages {
-    serde_json::from_str(catalog.source).unwrap_or_else(|error| {
-        log::error!("invalid embedded {} message catalog: {error}", catalog.id);
-        Messages::new()
-    })
-}
-
 /// The id of the fallback catalog.
 const ENGLISH_ID: &str = "en";
+
+/// The English shared catalogue as JSON (`locales/en.json`): the messages the shared crates own.
+/// A shared crate's tests read it to check that the ids the crate names are in it.
+pub const SHARED_ENGLISH: &str = include_str!("../locales/en.json");
 
 /// One language's messages, parsed from JSON (`{"id": "text", …}`) the first time they are read.
 pub struct Catalog {
@@ -65,8 +32,6 @@ pub struct Catalog {
     /// The catalog as JSON.
     pub source: &'static str,
     messages: OnceLock<Messages>,
-    /// The messages as written, when a host named another product ([`set_product_name`]).
-    written: OnceLock<Messages>,
     /// The messages in display order, for a catalog with right-to-left text (see [`bidi`]).
     shown: OnceLock<Option<Messages>>,
     /// English text → the ids with that text, for resolving a source label (see [`Locale::label`]).
@@ -75,27 +40,19 @@ pub struct Catalog {
 
 impl Catalog {
     pub const fn new(id: &'static str, name: &'static str, source: &'static str) -> Self {
-        Self { id, name, source, messages: OnceLock::new(), written: OnceLock::new(), shown: OnceLock::new(), label_ids: OnceLock::new() }
+        Self { id, name, source, messages: OnceLock::new(), shown: OnceLock::new(), label_ids: OnceLock::new() }
     }
 
-    /// The messages in reading order, as the catalog holds them, naming the product a host named
-    /// ([`set_product_name`]). An invalid catalog is logged and reads as empty.
+    /// The messages in reading order, as the catalog holds them. An invalid catalog is logged and
+    /// reads as empty.
     pub fn messages(&'static self) -> &'static Messages {
-        self.messages.get_or_init(|| {
-            let messages = parse(self);
-            match PRODUCT.get() {
-                Some(name) if name != PRODUCT_NAME => messages.into_iter().map(|(id, text)| (id, branded(&text).into_owned())).collect(),
-                _ => messages,
+        self.messages.get_or_init(|| match serde_json::from_str(self.source) {
+            Ok(messages) => messages,
+            Err(error) => {
+                log::error!("invalid embedded {} message catalog: {error}", self.id);
+                Messages::new()
             }
         })
-    }
-
-    /// The messages as written: the source labels in code are SolidCraft's own words.
-    fn written(&'static self) -> &'static Messages {
-        match PRODUCT.get() {
-            Some(name) if name != PRODUCT_NAME => self.written.get_or_init(|| parse(self)),
-            _ => self.messages(),
-        }
     }
 
     /// The messages as egui must be given them: right-to-left lines in display order, since egui
@@ -119,7 +76,7 @@ impl Catalog {
     fn label_ids(&'static self) -> &'static BTreeMap<&'static str, Vec<&'static str>> {
         self.label_ids.get_or_init(|| {
             let mut ids: BTreeMap<_, Vec<_>> = BTreeMap::new();
-            for (id, text) in self.written().iter().filter(|(_, text)| !text.contains('{')) {
+            for (id, text) in self.messages().iter().filter(|(_, text)| !text.contains('{')) {
                 ids.entry(text.as_str()).or_default().push(id.as_str());
             }
             ids
@@ -176,7 +133,22 @@ fn english() -> &'static Catalog {
 }
 
 pub fn is_supported(id: &str) -> bool {
-    locales().iter().any(|catalog| catalog.id == id)
+    let id = normalize_legacy_id(id.trim());
+    locales().iter().any(|catalog| catalog.id.eq_ignore_ascii_case(&id))
+}
+
+/// Normalizes legacy ISO 639-1 Hebrew codes (`iw`, `iw-IL`, `iw_IL`) to modern `he` tags.
+fn normalize_legacy_id(tag: &str) -> Cow<'_, str> {
+    if tag.eq_ignore_ascii_case("iw") {
+        Cow::Borrowed("he")
+    } else if tag.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("iw"))
+        && tag.as_bytes().get(2).is_some_and(|b| matches!(b, b'-' | b'_'))
+        && let Some(rest) = tag.get(2..)
+    {
+        Cow::Owned(format!("he{rest}"))
+    } else {
+        Cow::Borrowed(tag)
+    }
 }
 
 /// The `language` preference value that follows the system (#10138). Not a catalog id: it
@@ -185,11 +157,12 @@ pub const SYSTEM: &str = "system";
 
 /// Match the system's preferred locale tags against the catalogs: the exact tag first
 /// (`zh-TW`, `pt-BR`, `en-GB`), then the tag's base language (`zh-CN` → `zh`, `de-AT` → `de`),
-/// then English. A Chinese tag goes by its script or region instead ([`chinese_catalog`]).
-/// Tags come in the system's order of preference; the first one that matches wins.
+/// then English. Legacy `iw` tags resolve as Hebrew (`he`), and a Chinese tag goes by its script
+/// or region instead ([`chinese_catalog`]). Tags come in the system's order of preference; the
+/// first one that matches wins.
 pub fn match_system_tags(tags: &[String]) -> &'static str {
     for tag in tags {
-        let tag = tag.replace('_', "-");
+        let tag = normalize_legacy_id(tag.trim()).replace('_', "-");
         if let Some(catalog) = chinese_catalog(&tag) {
             return catalog;
         }
@@ -260,8 +233,8 @@ impl Locale {
     }
 
     pub fn for_language(id: &str) -> Self {
-        let id = if id == SYSTEM { system_language() } else { id };
-        Self(locales().iter().copied().find(|catalog| catalog.id == id).unwrap_or_else(english))
+        let id = if id == SYSTEM { system_language().to_string() } else { normalize_legacy_id(id.trim()).replace('_', "-") };
+        Self(locales().iter().copied().find(|catalog| catalog.id.eq_ignore_ascii_case(&id)).unwrap_or_else(english))
     }
 
     /// The catalog this locale reads.
@@ -540,7 +513,14 @@ mod tests {
         assert_eq!(match_system_tags(&tags(&["zh-Hant-TW"])), "zh-TW");
         assert_eq!(match_system_tags(&tags(&["zh-CN"])), "zh");
         assert_eq!(match_system_tags(&tags(&["xx-YY", "ja"])), "ja");
+        assert_eq!(match_system_tags(&tags(&["iw"])), "he");
+        assert_eq!(match_system_tags(&tags(&["iw-IL"])), "he");
+        assert_eq!(match_system_tags(&tags(&["iw_IL"])), "he");
         assert_eq!(match_system_tags(&tags(&["fr-FR"])), "en", "no catalog: English");
+        assert!(is_supported("he"));
+        assert!(is_supported("iw"));
+        assert_eq!(Locale::for_language("iw").catalog().id, "he");
+        assert_eq!(Locale::for_language("iw_IL").catalog().id, "en");
     }
 
     #[test]

@@ -106,12 +106,11 @@ pub fn tab_accent(t: &Tokens, tab: &str) -> TabAccent {
     TAB_ACCENTS.accent(t, tab)
 }
 
-/// The ribbon tab whose [`tab_accent`] a design view kind ("Model", "Sketch", "Sheet", "Render",
+/// The ribbon tab whose [`tab_accent`] a design view kind ("Model", "Sheet", "Render",
 /// "Animation") borrows for its sub-tab fill, ink and tint. A sheet reads as Sheet Metal; an
 /// animation has no ribbon tab of its own and keeps the main accent.
 pub fn view_accent_tab(kind: &str) -> &'static str {
     match kind {
-        "Sketch" => "SKETCH",
         "Sheet" => "SHEET METAL",
         "Render" => "RENDER",
         _ => "MODEL",
@@ -119,13 +118,11 @@ pub fn view_accent_tab(kind: &str) -> &'static str {
 }
 
 /// The stroke colour of a design view kind's icon in the Tabs board: its fill in the light theme
-/// and a brighter step of it in the dark one. Model, Sketch and Render follow their accents;
+/// and a brighter step of it in the dark one. Model and Render follow their accents;
 /// Sheet is teal and Animation amber, as drawn. The board shows no dark Animation stroke, so it
 /// reuses the dark Surface ink. Unknown kinds take Model's.
 pub fn view_icon_colour(kind: &str, dark: bool) -> egui::Color32 {
     let hex: u32 = match (kind, dark) {
-        ("Sketch", false) => 0x057f45,
-        ("Sketch", true) => 0x3cc07a,
         ("Sheet", false) => 0x0f7b72,
         ("Sheet", true) => 0x3dbfb1,
         ("Render", false) => 0xa8326e,
@@ -196,6 +193,7 @@ pub fn groups(tab: &str, panel: &str) -> &'static [CommandGroup] {
                     "construct.plane.tangent",
                     "construct.plane.along_path",
                     "construct.plane.perpendicular",
+                    "construct.plane.square_to_line",
                 ],
             },
             CommandGroup {
@@ -283,7 +281,7 @@ pub const SECTIONS: &[Section] = &[
         ids: &[
             "drawing.view.base.planned",
             "drawing.view.section.planned",
-            "drawing.view.detail",
+            "drawing.view.detail.planned",
             "drawing.view.break",
             "drawing.view.auxiliary.planned",
             "drawing.view.pictorial",
@@ -342,7 +340,7 @@ pub const SECTIONS: &[Section] = &[
         promoted: 3,
         ids: &["drawing.revision", "drawing.revise.planned", "drawing.revision.tag.add.planned"],
     },
-    Section { tab: "DRAWING REVIEW", panel: "OUTPUT", promoted: 2, ids: &["drawing.export.planned", "drawing.print"] },
+    Section { tab: "DRAWING REVIEW", panel: "OUTPUT", promoted: 2, ids: &["drawing.export", "drawing.print"] },
     Section {
         tab: "MODEL",
         panel: "SKETCH",
@@ -569,6 +567,7 @@ pub const SECTIONS: &[Section] = &[
     // A frame starts from a sketch of its lines; its profile sizes are often parameters.
     Section { tab: "WELDMENTS", panel: "SKETCH", promoted: 1, ids: &["sketch.create"] },
     Section { tab: "WELDMENTS", panel: "CREATE", promoted: 2, ids: &["frame.member", "frame.end_cap"] },
+    Section { tab: "WELDMENTS", panel: "MODIFY", promoted: 1, ids: &["frame.rotate_member"] },
     Section { tab: "WELDMENTS", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
 ];
 
@@ -629,8 +628,6 @@ const LEGACY_RENDER_SECTIONS: &[Section] = &[
 /// Compact source labels for painted big buttons only. Menus, search and tooltips
 /// retain the engine label. Route these through `tr_label`, like other UI labels.
 pub const RIBBON_LABELS: &[(&str, &str)] = &[
-    // Only on a host's ribbon (`toolbar::embedded_export`): it asks where to save.
-    ("file.export", "Export…"),
     ("render.batch", "All Shots"),
     ("render.cancel", "Cancel"),
     ("render.export", "Export Image"),
@@ -668,7 +665,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("drawing.check.planned", "Check Drawing"),
     ("drawing.dimension", "Dimension"),
     ("drawing.dimension.from_model.planned", "Model Dims."),
-    ("drawing.export.planned", "Export"),
+    ("drawing.export", "Export"),
     ("drawing.hole_callout", "Hole Callout"),
     ("drawing.image", "Image"),
     ("drawing.leader", "Leader Note"),
@@ -684,6 +681,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("drawing.view.flat_pattern", "Flat Pattern"),
     ("drawing.view.section.planned", "Section View"),
     ("document.units", "Units"),
+    ("frame.rotate_member", "Rotate"),
     ("inspect.accessibility", "Access"),
     ("inspect.center_of_mass", "Mass Center"),
     ("inspect.curvature_comb", "Curv. Comb"),
@@ -1206,7 +1204,7 @@ mod tests {
         let buttons = crate::toolbar_custom::buttons(&h.app, "DRAWING LAYOUT", "VIEWS", &views, count);
         assert_eq!(
             buttons.iter().map(|command| command.id).collect::<Vec<_>>(),
-            ["drawing.view.base.planned", "drawing.view.section.planned", "drawing.view.detail", "drawing.view.break"]
+            ["drawing.view.base.planned", "drawing.view.section.planned", "drawing.view.detail.planned", "drawing.view.break"]
         );
         assert!(views.iter().any(|command| command.id == "drawing.view.flat_pattern"));
         assert!(!views.iter().any(|command| command.id == "drawing.view.projected.planned"));
@@ -1224,7 +1222,7 @@ mod tests {
         let buttons = crate::toolbar_custom::buttons(&h.app, "DRAWING LAYOUT", "VIEWS", &views, count);
         assert_eq!(
             buttons.iter().map(|command| command.id).collect::<Vec<_>>(),
-            ["drawing.view.base.planned", "drawing.view.section.planned", "drawing.view.detail", "drawing.view.flat_pattern"]
+            ["drawing.view.base.planned", "drawing.view.section.planned", "drawing.view.detail.planned", "drawing.view.flat_pattern"]
         );
     }
 
@@ -1279,8 +1277,8 @@ mod tests {
         let model = h.app.session.doc.clone();
         let steps = h.app.session.undo.len();
         // One key at a time: Ctrl+Y after a wrong Ctrl+Z would put the design back.
-        for key in ["Z", "Y"] {
-            h.step(&json!({"key":key,"cmd":true})).unwrap();
+        for (key, shift) in [("Z", false), ("Y", false), ("Z", true)] {
+            h.step(&json!({"key":key,"cmd":true,"shift":shift})).unwrap();
             h.frames(2);
             assert_eq!(h.app.session.doc, model, "Ctrl+{key} on the empty Drawing page leaves the design alone");
             assert_eq!((h.app.session.undo.len(), h.app.session.redo.len()), (steps, 0), "Ctrl+{key}");
@@ -1305,6 +1303,12 @@ mod tests {
         h.step(&json!({"key":"Y","cmd":true})).unwrap();
         h.frames(2);
         assert_eq!(sheets(&mut h), added, "Ctrl+Y redoes it");
+        // Ctrl+Shift+Z redoes too (#12902), in a drawing as in Design.
+        h.step(&json!({"key":"Z","cmd":true})).unwrap();
+        h.frames(2);
+        h.step(&json!({"key":"Z","cmd":true,"shift":true})).unwrap();
+        h.frames(2);
+        assert_eq!(sheets(&mut h), added, "Ctrl+Shift+Z redoes it");
         for _ in 0..2 {
             h.step(&json!({"key":"Z","cmd":true})).unwrap();
             h.frames(2);
@@ -1502,13 +1506,23 @@ mod tests {
         assert_eq!(h.app.ui.tab, "SHEET METAL");
     }
 
+    /// Rotate Member sits in Weldments' MODIFY panel, after CREATE, as a button of its own.
+    #[test]
+    fn weldments_modify_panel_lists_rotate_member() {
+        let specs = solidcraft_engine::command_specs();
+        let (modify, n) = layout("WELDMENTS", "MODIFY", &specs).unwrap();
+        assert_eq!(modify.iter().take(n).map(|c| c.id).collect::<Vec<_>>(), ["frame.rotate_member"]);
+        let at = |p: &str| panels("WELDMENTS").iter().position(|q| *q == p);
+        assert_eq!(at("MODIFY"), at("CREATE").map(|i| i + 1));
+    }
+
     /// Weldments is there in a fresh document (a frame starts from a sketch of its lines), holds
     /// Frame Member, and selects itself while a member is the active body, as Sheet Metal does for
     /// a sheet body, but keeps the ordinary tab look.
     #[test]
     fn weldments_tab_holds_frame_member_and_follows_a_member_body() {
         let specs = solidcraft_engine::command_specs();
-        assert_eq!(panels("WELDMENTS"), ["SKETCH", "CREATE", "CONFIGURE"]);
+        assert_eq!(panels("WELDMENTS"), ["SKETCH", "CREATE", "MODIFY", "CONFIGURE"]);
         let (create, n) = layout("WELDMENTS", "CREATE", &specs).unwrap();
         assert_eq!(create.iter().take(n).map(|c| c.id).collect::<Vec<_>>(), ["frame.member", "frame.end_cap"]);
         assert!(!panel_ids("MODEL", &specs).contains(&"frame.member"), "Frame Member's home is Weldments");
@@ -2012,12 +2026,12 @@ mod tests {
     #[test]
     fn view_icon_colours_hold_graphic_contrast_and_accent_tabs_exist() {
         for (dark, panel) in [(false, Tokens::light().panel), (true, Tokens::dark().panel)] {
-            for kind in ["Model", "Sketch", "Sheet", "Render", "Animation", "other"] {
+            for kind in ["Model", "Sheet", "Render", "Animation", "other"] {
                 let ratio = solidcraft_theme::contrast_ratio(view_icon_colour(kind, dark), panel);
                 assert!(ratio >= 3.0, "{kind} dark={dark}: {ratio:.2}:1");
             }
         }
-        for kind in ["Model", "Sketch", "Sheet", "Render", "Animation"] {
+        for kind in ["Model", "Sheet", "Render", "Animation"] {
             assert!(TAB_ACCENTS.contains(view_accent_tab(kind)), "{kind}");
         }
     }

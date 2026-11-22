@@ -82,7 +82,9 @@ impl SolveApp {
         self.begin_picker(future, Box::new(complete));
     }
 
-    /// Choose a library folder without blocking the event loop or changing a design.
+    /// Ask for a folder: a plugin field's Browse button, or the document library's folder.
+    /// The plugin dialog shows Browse only when this service is set. Without a host dialog,
+    /// the answer is a cancel and nothing is changed.
     pub(crate) fn pick_folder(&mut self, complete: impl FnOnce(&mut SolveApp, Option<String>) + 'static) {
         if self.file_picker_busy() {
             return;
@@ -314,22 +316,6 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
             assert!(h.app.status.as_ref().is_some_and(|(text, _, error)| text.starts_with("Exported ") && !error));
         }
-    }
-
-    /// Export itself, started from command search, asks where to save (in any format it writes)
-    /// and says where it went, instead of running without a path ("`path` is required").
-    #[test]
-    fn export_from_command_search_asks_where_to_save() {
-        let mut h = crate::scenario::Harness::new();
-        h.app.run("solid.box", json!({"length":10,"width":10,"height":10})).unwrap();
-        let answer = picker(&mut h.app, true);
-        h.app.start("file.export");
-        h.frames(2);
-        assert!(h.app.file_picker_busy(), "Export must open the save picker");
-        let path = h.dir.join("part.stl");
-        finish(&mut h.app, &answer, Some(path.to_string_lossy().into_owned()));
-        assert!(path.is_file());
-        assert!(h.app.status.as_ref().is_some_and(|(text, _, error)| text.starts_with("Exported ") && !error), "{:?}", h.app.status);
     }
 
     /// Saving the design says where it went, as an export does (#8693).

@@ -85,6 +85,24 @@ pub struct ExportStlParams {
     /// as it lies in the design.
     #[serde(default)]
     pub lay_on_print_faces: Option<bool>,
+    /// True writes ASCII STL instead of binary. Default: false.
+    #[serde(default)]
+    pub ascii: Option<bool>,
+    /// `body` (the default) writes one solid for the file; `face` writes one `solid <name>` block
+    /// for each B-rep face, named by the face's persistent name, for CFD meshers
+    /// (docs/formats/stl-face-solids.md). `face` needs `ascii: true`.
+    #[serde(default)]
+    pub solids: Option<SolidsParam>,
+}
+
+/// What `solids` splits an STL export into.
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SolidsParam {
+    /// One solid for the file, as always.
+    Body,
+    /// One named solid for each B-rep face (ASCII STL only).
+    Face,
 }
 
 /// Export bodies as a 3MF file, whatever the path's extension.
@@ -204,6 +222,10 @@ pub struct ExportParams {
     /// `file.export_stl` has it; refused for the other formats. Default: false. Not read for URDF.
     #[serde(default)]
     pub lay_on_print_faces: Option<bool>,
+    /// ASCII STL (`stla`) only: `face` writes one named solid for each B-rep face, as
+    /// `file.export_stl` has it; refused for the other formats. Default: body.
+    #[serde(default)]
+    pub solids: Option<SolidsParam>,
     /// SDF only: the model's name. Default: the folder's name.
     #[serde(default)]
     pub name: Option<String>,
@@ -285,6 +307,7 @@ impl<'de> Deserialize<'de> for ExportParams {
             velocity: None,
             images: None,
             lay_on_print_faces: None,
+            solids: None,
             name: None,
             is_static: None,
             model_uris: None,
@@ -302,6 +325,18 @@ impl<'de> Deserialize<'de> for ExportParams {
             return Ok(out);
         };
         out.bodies = names::<D::Error>(&m)?;
+        // `solids` is checked for every format, so URDF and SDF refuse `face` as binary STL does.
+        out.solids = match m.get("solids") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(v)) if v == "body" => Some(SolidsParam::Body),
+            Some(Value::String(v)) if v == "face" && format == Format::StlAscii => Some(SolidsParam::Face),
+            Some(Value::String(v)) if v == "face" => {
+                return Err(refuse(
+                    "`solids: face` needs ASCII STL (format stla, or ascii: true): binary STL and other formats have no named solids",
+                ));
+            }
+            Some(v) => return Err(refuse(format!("`solids` must be body or face, not {v}"))),
+        };
         if format == Format::Urdf {
             // URDF reads its own keys; `quality` and `objects` are not read.
             out.mesh_prefix = text::<D::Error>(&m, "mesh_prefix")?;
@@ -601,8 +636,8 @@ impl JsonSchema for ReaderParam {
 /// the units and defaults of `sketch.insert_dxf` and `sketch.insert_svg`), a STEP, IGES,
 /// FreeCAD, Rhino, 3MF, STL, OBJ or glTF file (a new design holding the file as a component
 /// named after it, as `file.insert_step` and `file.insert_mesh` make), or a `.ply`, `.pcd`,
-/// `.xyz`, `.pts` or `.asc` point cloud (a new design holding it, as `pointcloud.insert` makes).
-/// The open design is replaced.
+/// `.e57`, `.xyz`, `.pts` or `.asc` point cloud (a new design holding it, as `pointcloud.insert`
+/// makes). The open design is replaced.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct OpenParams {
@@ -630,6 +665,11 @@ pub struct OpenParams {
     /// Default: solidcraft.
     #[serde(default)]
     pub reader: Option<ReaderParam>,
+    /// For an OpenUSD file only (refused for any other): what it brings in, `meshes` (its meshes
+    /// as mesh bodies) or `exact` (its exact B-rep where it has one as B-rep bodies of an Import
+    /// feature, its other meshes as mesh bodies). Default: meshes.
+    #[serde(default)]
+    pub geometry: Option<super::insert_mesh::GeometryParam>,
     /// For a 3MF, STL, OBJ or glTF file only (refused for any other): true moves the mesh so its
     /// box is centred on X and Y with its base on Z = 0. Default: false.
     #[serde(default)]
