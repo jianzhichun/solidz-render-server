@@ -18,8 +18,9 @@ Changes against SolidCraft v0.47.0 (apps/solidcraft-render-server/SPIKE.md lists
   to leave out the Assistant and the app bar's tile picker; where a host runs the editor, Export in the Insert tab's
   Import/Export panel)
 - changed: crates/ui-text (a host product's name in every message)
-- changed: xtask/src/layers.rs (registers the new app), Cargo.lock (the new package), and the
-  messages in
+- changed: xtask/src/layers.rs (registers the new app), Cargo.lock (the new package),
+  THIRD-PARTY-LICENSES.txt (regenerated with cargo xtask licences for this Cargo.lock: url 2.5.9,
+  form_urlencoded 1.2.3), and the messages in
   assets/locales/pending/command-refusals-and-export-status.json and
   assets/locales/pending/embedded-import-export.json
 
