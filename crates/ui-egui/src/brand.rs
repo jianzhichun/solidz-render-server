@@ -10,6 +10,21 @@ thread_local! {
     /// Commands the host does not offer in this UI, each with why ([`refuse_commands`]). Per
     /// thread: the UI and its commands run on one.
     static REFUSED: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    /// Commands whose "not available right now" stays off the status line ([`quiet_commands`]).
+    static QUIET: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Commands a host runs for itself over the control channel, whose refusal it reads from the
+/// answer and the user must not see as a status message (SolidZ reads `timeline.export_script`
+/// after the assistant's calls; for a design with bodies moved between components it is disabled,
+/// and each read showed the reason on the status line). An empty list keeps every reason shown.
+pub fn quiet_commands(ids: &[&str]) {
+    QUIET.set(ids.iter().map(|id| id.to_string()).collect());
+}
+
+/// The host keeps this command's refusal off the status line.
+pub fn quiet(id: &str) -> bool {
+    QUIET.with(|q| q.borrow().iter().any(|quiet| quiet == id))
 }
 
 /// Refuse these commands in the UI on this thread, each `(id, reason)` with the host's words: they
@@ -67,6 +82,18 @@ mod tests {
 
     /// A command the host refuses is refused whichever way it comes (run, started, its key, the
     /// Assistant's own control) and command search does not offer it; offered again once not refused.
+    #[test]
+    fn a_quiet_command_s_refusal_stays_off_the_status_line() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.start("drawing.export");
+        assert!(h.app.status.as_ref().is_some_and(|s| s.2), "unquiet: the reason is shown");
+        h.app.status = None;
+        super::quiet_commands(&["drawing.export"]);
+        h.app.start("drawing.export");
+        assert!(h.app.status.is_none(), "quiet: nothing on the status line");
+        super::quiet_commands(&[]);
+    }
+
     #[test]
     fn a_refused_assistant_is_refused_and_not_offered() {
         let mut h = crate::scenario::Harness::new();

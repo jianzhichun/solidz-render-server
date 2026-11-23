@@ -46,6 +46,12 @@ jobs:
           echo "runner: ${{ matrix.os }}"; uname -a || true
           (sysctl -n hw.ncpu hw.memsize 2>/dev/null || nproc 2>/dev/null || echo "$NUMBER_OF_PROCESSORS cpus") | tee machine.txt
           rustup show active-toolchain || true
+      # the build cache (the registry and target/), per platform and Cargo.lock: a change to this program rebuilds its own
+      # crates, not the 500 others (a cold build is about an hour)
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-on-failure: true
       # THIRD-PARTY-LICENSES.txt is generated for the upstream programs; it ships with this one only if it lists every
       # registry or git crate built into it (normal dependencies, any platform). Before the build, so a gap fails fast.
       - name: third-party licences cover the program

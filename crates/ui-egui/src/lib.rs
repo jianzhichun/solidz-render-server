@@ -2560,9 +2560,12 @@ impl SolveApp {
         if let Some(info) = solidcraft_engine::find_command(id).map(|c| c.info(&self.session))
             && let Some(why) = info.disabled_reason
         {
-            let label = self.tr_command(id, info.label).to_string();
-            let why = self.tr_label(&why).to_string();
-            self.set_status(format!("{label}: {why}"), true);
+            // a command the host runs for itself is refused in its answer only (brand::quiet_commands)
+            if !brand::quiet(id) {
+                let label = self.tr_command(id, info.label).to_string();
+                let why = self.tr_label(&why).to_string();
+                self.set_status(format!("{label}: {why}"), true);
+            }
             return;
         }
         // The ribbon's Ground acts on the selected placements, or the components picked in the

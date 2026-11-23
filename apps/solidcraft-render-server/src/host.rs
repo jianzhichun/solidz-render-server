@@ -42,6 +42,9 @@ pub fn refuse_on_this_thread() {
         ("ui.appBarCustomize", APP_BAR_REFUSED),
         ("ui.appBarReset", APP_BAR_REFUSED),
     ]);
+    // the plugin reads the design's rebuild script after the assistant's calls; a design it cannot be written for (bodies moved
+    // between components) refuses it, and the plugin reads that from the answer: not a message for the user
+    solidcraft_ui_egui::brand::quiet_commands(&["timeline.export_script"]);
 }
 
 /// The app as the host's editor (#8517: no app bar, start page, New/Open/Save/Close; ribbon,
