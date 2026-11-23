@@ -6410,6 +6410,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "solidcraft-render-server"
+version = "0.46.2"
+dependencies = [
+ "arboard",
+ "egui",
+ "egui-wgpu",
+ "image",
+ "log",
+ "pollster 0.4.0",
+ "rayon",
+ "serde",
+ "serde_json",
+ "solidcraft-control",
+ "solidcraft-engine",
+ "solidcraft-look",
+ "solidcraft-ui-egui",
+ "solidcraft-ui-text",
+ "solidcraft-viewport",
+ "solidcraft-viewport-gpu",
+ "wgpu",
+]
+
+[[package]]
 name = "solidcraft-sketch"
 version = "0.47.0"
 dependencies = [

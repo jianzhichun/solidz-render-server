@@ -1,0 +1,65 @@
+{
+  "en": {
+    "command.error.not_available": "{command} is not available right now: {reason}",
+    "command.error.required": "`{name}` is required",
+    "ui.exported_to": "Exported {path}",
+    "ui.export_cancelled": "Export canceled",
+    "ui.choose_export_file": "Choose an export file…"
+  },
+  "ar": {
+    "command.error.not_available": "{command} غير متاح الآن: {reason}",
+    "command.error.required": "`{name}` مطلوب",
+    "ui.exported_to": "تم التصدير إلى {path}",
+    "ui.export_cancelled": "تم إلغاء التصدير",
+    "ui.choose_export_file": "اختر ملف التصدير…"
+  },
+  "de": {
+    "command.error.not_available": "{command} ist gerade nicht verfügbar: {reason}",
+    "command.error.required": "`{name}` ist erforderlich",
+    "ui.exported_to": "Exportiert: {path}",
+    "ui.export_cancelled": "Export abgebrochen",
+    "ui.choose_export_file": "Exportdatei auswählen…"
+  },
+  "he": {
+    "command.error.not_available": "{command} אינו זמין כרגע: {reason}",
+    "command.error.required": "`{name}` נדרש",
+    "ui.exported_to": "יוצא: {path}",
+    "ui.export_cancelled": "הייצוא בוטל",
+    "ui.choose_export_file": "בחר קובץ לייצוא…"
+  },
+  "ja": {
+    "command.error.not_available": "{command} は現在使用できません: {reason}",
+    "command.error.required": "`{name}` は必須です",
+    "ui.exported_to": "エクスポートしました: {path}",
+    "ui.export_cancelled": "エクスポートをキャンセルしました",
+    "ui.choose_export_file": "エクスポート先のファイルを選択…"
+  },
+  "ko": {
+    "command.error.not_available": "{command}은(는) 지금 사용할 수 없습니다: {reason}",
+    "command.error.required": "`{name}`이(가) 필요합니다",
+    "ui.exported_to": "내보냄: {path}",
+    "ui.export_cancelled": "내보내기를 취소했습니다",
+    "ui.choose_export_file": "내보낼 파일 선택…"
+  },
+  "vi": {
+    "command.error.not_available": "{command} hiện không khả dụng: {reason}",
+    "command.error.required": "Cần có `{name}`",
+    "ui.exported_to": "Đã xuất {path}",
+    "ui.export_cancelled": "Đã hủy xuất",
+    "ui.choose_export_file": "Chọn tệp xuất…"
+  },
+  "zh": {
+    "command.error.not_available": "{command}当前不可用：{reason}",
+    "command.error.required": "缺少 `{name}`",
+    "ui.exported_to": "已导出：{path}",
+    "ui.export_cancelled": "已取消导出",
+    "ui.choose_export_file": "选择导出文件…"
+  },
+  "zh-TW": {
+    "command.error.not_available": "{command}目前無法使用：{reason}",
+    "command.error.required": "缺少 `{name}`",
+    "ui.exported_to": "已匯出：{path}",
+    "ui.export_cancelled": "已取消匯出",
+    "ui.choose_export_file": "選擇匯出檔案…"
+  }
+}

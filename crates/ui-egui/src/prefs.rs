@@ -4061,8 +4061,10 @@ fn button_jobs_that_read<'de, D: serde::Deserializer<'de>>(
 fn theme_choices(app: &SolveApp) -> Vec<(String, String)> {
     let modes =
         THEMES.iter().filter(|(id, _)| *id != "system").map(|(id, label)| ((*id).to_string(), solidcraft_ui_text::tr_label(label).to_string()));
-    // Built-in names are UI labels; a custom theme keeps the name its author gave it.
-    let builtins = crate::theme_files::builtin().iter().map(|t| (t.id.clone(), solidcraft_ui_text::tr_label(&t.name).to_string()));
+    // Built-in names are UI labels; a custom theme keeps the name its author gave it. A built-in
+    // theme named after SolidCraft ("SolidCraft 95") says the product a host named (`brand`).
+    let builtins =
+        crate::theme_files::builtin().iter().map(|t| (t.id.clone(), solidcraft_ui_text::branded(solidcraft_ui_text::tr_label(&t.name)).into_owned()));
     let custom = app.preferences.custom_themes.iter().map(|t| (t.id.clone(), t.name.clone()));
     let mut choices: Vec<_> = modes.chain(builtins).chain(custom).collect();
     choices.sort_by_key(|(id, _)| match id.as_str() {

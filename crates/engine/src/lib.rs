@@ -43,6 +43,7 @@ pub mod params;
 pub mod plugin;
 pub mod point_cloud_pick;
 pub mod product_scene;
+pub mod read_only;
 pub mod recovery;
 pub mod render_jobs;
 pub mod render_lights;
@@ -2759,6 +2760,10 @@ impl Session {
             return self.execute("plugin.run", &call);
         }
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        // Host read-only (an embedding host's expired licence): saving and history moves are refused outright.
+        if let Some(why) = read_only::refusal(spec.id) {
+            return Err(EngineError::Disabled(spec.id.to_string(), why));
+        }
         if panels::commands::is_command(spec.id) {
             // Layout is application state. Even a missing capability must not
             // clear live links, map picks, snapshot, evaluate or refresh a design.
@@ -2917,6 +2922,19 @@ impl Session {
         // A command that closed the drawing, or opened another, ends its sheet scenes.
         drawing_scene::forget_closed(self);
         self.prune_drawing_selection();
+        let changed = !Arc::ptr_eq(&self.doc, &before.doc);
+        // Hiding or showing (`browser.visibility`) leaves the document alone, so it needs its own
+        // test: it is saved with the design and has an undo step of its own.
+        let hidden = self.visibility != before.visibility;
+        // Host read-only: what changed the design is refused, and the error path below puts it back.
+        // Before the crash journal takes the outcome, so a refused change is never replayed.
+        let r = match r {
+            Ok(_) if changed || hidden => match read_only::change_refusal(spec.id) {
+                Some(why) => Err(EngineError::Disabled(spec.id.to_string(), why)),
+                None => r,
+            },
+            r => r,
+        };
         let crash_outcome = if outermost && crash::enabled() {
             let failed = r.as_ref().err().map(ToString::to_string);
             // Commands that only read leave no trace (the journal keeps what a replay needs).
@@ -2932,10 +2950,6 @@ impl Session {
         } else {
             None
         };
-        let changed = !Arc::ptr_eq(&self.doc, &before.doc);
-        // Hiding or showing (`browser.visibility`) leaves the document alone, so it needs its own
-        // test: it is saved with the design and has an undo step of its own.
-        let hidden = self.visibility != before.visibility;
         // A Section Analysis is view state outside the design, with undo steps of its own.
         let sectioned = self.section_state() != section_before;
         if sectioned {
