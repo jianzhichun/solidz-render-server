@@ -962,6 +962,14 @@ pub(crate) fn export(app: &mut SolveApp, ext: &str) {
 /// does what that File › Export item does: STEP, OBJ and URDF ask where to save, STL and 3MF
 /// open the mesh dialog with the format chosen. `false`: `id` is no such command.
 pub(crate) fn start_export(app: &mut SolveApp, id: &str) -> bool {
+    // Export itself (command search) asks where to save and in which format, as the browser's
+    // Export… does; run as it was, it only said that `path` is required.
+    if id == "file.export" {
+        if FileAction::Export("step").enabled(app) {
+            export_in(app, EXPORT_EXTENSIONS, None);
+        }
+        return true;
+    }
     let (extension, mesh) = match id {
         "file.export_step" => ("step", false),
         "file.export_obj" => ("obj", false),
@@ -983,14 +991,22 @@ pub(crate) fn start_export(app: &mut SolveApp, id: &str) -> bool {
     true
 }
 
+/// The extensions `file.export` writes, the first one offered.
+pub(crate) const EXPORT_EXTENSIONS: &[&str] = &["step", "stp", "igs", "stl", "3mf", "obj", "glb", "usd", "usda", "usdc", "usdz"];
+
 /// Export to a file with extension `ext`, in `format` when the extension alone doesn't name it.
 fn export_as(app: &mut SolveApp, ext: &str, format: Option<&str>) {
+    export_in(app, &[ext], format);
+}
+
+/// Export to a file with one of `exts` (the first offered).
+fn export_in(app: &mut SolveApp, exts: &[&str], format: Option<&str>) {
     let body = crate::export_name::first_body(app);
-    let name = format!("{}.{ext}", crate::export_name::offered(app, body.as_deref(), &app.session.doc.name));
+    let name = format!("{}.{}", crate::export_name::offered(app, body.as_deref(), &app.session.doc.name), exts[0]);
     let format = format.map(str::to_string);
     // OpenUSD: the extension chosen picks binary (`.usd`, `.usdc`), text (`.usda`) or a package
     // (`.usdz`).
-    let exts: &[&str] = if solidcraft_engine::io::is_usd_path(&name) { &solidcraft_engine::io::USD_EXTS } else { std::slice::from_ref(&ext) };
+    let exts: &[&str] = if solidcraft_engine::io::is_usd_path(&name) { &solidcraft_engine::io::USD_EXTS } else { exts };
     app.pick_save(&name, exts, move |app, path| {
         let Some(path) = path else { return };
         let mut params = json!({"path": path});
@@ -1000,7 +1016,10 @@ fn export_as(app: &mut SolveApp, ext: &str, format: Option<&str>) {
         if let Ok(result) = app.run("file.export", params) {
             let skipped =
                 result.get("skipped").and_then(Value::as_array).map_or(Vec::new(), |a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>());
-            let line = if skipped.is_empty() { format!("Exported {path}") } else { format!("Exported {path} (skipped {})", skipped.join(", ")) };
+            let mut line = solidcraft_ui_text::format("ui.exported_to", &[("path", &path)]);
+            if !skipped.is_empty() {
+                line.push_str(&format!(" (skipped {})", skipped.join(", ")));
+            }
             app.set_status(line, false);
         }
     });
@@ -1576,8 +1595,18 @@ impl RibbonPanels {
                 Panel {
                     panel,
                     key: format!("{tab}:{panel}"),
-                    label: if finish { app.tr("ui.ribbon_exit").to_string() } else { ribbon_label(app, panel) },
-                    tip: format!("{} ({})", app.tr_label(panel), shown.len().max(cmds.len())),
+                    label: if finish {
+                        app.tr("ui.ribbon_exit").to_string()
+                    } else if import_export(app, tab, panel) {
+                        app.tr("ui.ribbon_import_export").to_string()
+                    } else {
+                        ribbon_label(app, panel)
+                    },
+                    tip: if import_export(app, tab, panel) {
+                        format!("{} ({})", app.tr("ui.ribbon_import_export"), shown.len().max(cmds.len()))
+                    } else {
+                        format!("{} ({})", app.tr_label(panel), shown.len().max(cmds.len()))
+                    },
                     popup_id,
                     commands: cmds.iter().map(|c| c.id).collect(),
                     icon: shown.first().or(cmds.first()).map(|c| c.info(&app.session).icon),
@@ -1745,6 +1774,26 @@ const RIBBON_HANDLES: ribbon::Handles<'static> = ribbon::Handles {
     drag_remove: "toolbar_drag:remove",
 };
 
+/// A host that runs the editor (`embed_editor`) draws no application bar, so no File menu: the
+/// Insert tab's Files panel is where its files come in and go out.
+fn import_export(app: &SolveApp, tab: &str, panel: &str) -> bool {
+    app.embed_editor && tab == "INSERT" && panel == "FILES"
+}
+
+/// Export in that panel ([`import_export`]), after the inserts it shows as buttons and as one of
+/// them: started, it asks where to save in any format `file.export` writes ([`start_export`]).
+/// Returns the panel's button count.
+fn embedded_export(app: &SolveApp, tab: &str, panel: &str, cmds: &mut Vec<&'static solidcraft_engine::CommandSpec>, promote: usize) -> usize {
+    let export = solidcraft_engine::find_command("file.export");
+    match export.filter(|e| import_export(app, tab, panel) && !cmds.iter().any(|c| c.id == e.id)) {
+        Some(export) => {
+            cmds.insert(promote.min(cmds.len()), export);
+            promote + 1
+        }
+        None => promote,
+    }
+}
+
 /// One panel of a tab: its name, every command and the buttons it shows.
 type PanelList = (&'static str, Vec<&'static solidcraft_engine::CommandSpec>, Vec<&'static solidcraft_engine::CommandSpec>);
 
@@ -1863,6 +1912,7 @@ fn ribbon_contents(app: &mut SolveApp, ui: &mut egui::Ui, shape: RibbonShape) ->
                 } else {
                     promote
                 };
+                let promote = embedded_export(app, &tab, panel, &mut cmds, promote);
                 if !app.preferences.sketch_construction_lines {
                     cmds.retain(|c| solidcraft_engine::cmd::construction_line_mode(c.id).is_none());
                 }
@@ -7561,5 +7611,58 @@ mod quick_access_tests {
             "sketch.rectangle.three_point",
             "the ribbon's Rectangle button still starts its remembered choice"
         );
+    }
+}
+
+#[cfg(test)]
+mod embedded_export_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Every text the last frame painted.
+    fn painted(h: &crate::scenario::Harness) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        h.shapes.iter().for_each(|s| walk(&s.shape, &mut out));
+        out
+    }
+
+    /// A host that runs the editor has no File menu: Insert › Files offers Export after the
+    /// inserts it shows and reads as Import/Export; the button asks where to save, offering every
+    /// format `file.export` writes, and writes there. The desktop's ribbon stays as it was.
+    #[test]
+    fn a_hosted_editor_exports_from_the_files_panel() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        h.step(&json!({"click": {"handle": "tab:INSERT"}})).unwrap();
+        assert!(crate::scenario::handle_at("toolbar:file.export").is_none(), "the desktop's ribbon has no Export");
+        assert!(!painted(&h).iter().any(|t| t == "Import/Export"));
+        h.app.embed_editor = true;
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let (dir, log) = (h.dir.clone(), asked.clone());
+        h.app.services.pick_save = Some(Box::new(move |name, exts| {
+            log.borrow_mut().push((name.to_string(), exts.iter().map(|e| e.to_string()).collect::<Vec<_>>()));
+            Box::pin(std::future::ready(Some(dir.join(name).to_string_lossy().into_owned())))
+        }));
+        h.frames(2);
+        assert!(painted(&h).iter().any(|t| t == "Import/Export"), "{:?}", painted(&h));
+        let buttons: Vec<String> = crate::scenario::handles("toolbar:").into_iter().map(|(n, _)| n).collect();
+        let at = |id: &str| buttons.iter().position(|n| n == &format!("toolbar:{id}"));
+        assert!(at("file.insert_mesh") < at("file.export"), "after the inserts: {buttons:?}");
+        h.step(&json!({"click": {"handle": "toolbar:file.export"}})).unwrap();
+        h.frames(3);
+        let asked = asked.borrow();
+        assert_eq!(asked.len(), 1, "one save ask");
+        assert!(asked[0].0.ends_with(".step"), "{asked:?}");
+        assert_eq!(asked[0].1, EXPORT_EXTENSIONS.iter().map(|e| e.to_string()).collect::<Vec<_>>());
+        let written = h.dir.join(&asked[0].0);
+        assert!(std::fs::metadata(&written).is_ok_and(|m| m.len() > 0), "{} written", written.display());
     }
 }
