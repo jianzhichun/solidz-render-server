@@ -221,13 +221,13 @@ pub fn search(app: &SolveApp, q: &str) -> Vec<Row> {
     let q = q.trim().to_lowercase();
     let mut v: Vec<(u32, Row)> = command_specs()
         .into_iter()
-        .filter(|c| !crate::workspace::AGENT_ONLY.contains(&c.id) && !crate::brand::hides_command(c.id))
+        .filter(|c| !crate::workspace::AGENT_ONLY.contains(&c.id))
         .filter(|c| available_in_workspace(app, c.id))
         .filter_map(|c| {
             let (home_tab, home_panel) = crate::workspace::destination(c).unwrap_or(("", ""));
             let info = crate::render_workspace::interactive_command_info(app, c);
             let (label, tab, panel) = (
-                solidcraft_ui_text::tr_label(info.label),
+                solidcraft_ui_text::tr_command(c.id, info.label),
                 solidcraft_ui_text::tr_label(crate::workspace::tab_label(home_tab)),
                 solidcraft_ui_text::tr_label(home_panel),
             );
@@ -338,9 +338,8 @@ fn closest(query: &str) -> Option<&'static str> {
     let q: Vec<_> = query.trim().to_lowercase().chars().take(128).collect();
     command_specs()
         .into_iter()
-        .filter(|c| !crate::brand::hides_command(c.id))
         .map(|c| {
-            let label = solidcraft_ui_text::tr_label(c.label);
+            let label = solidcraft_ui_text::tr_command(c.id, c.label);
             let mut prev: Vec<_> = (0..=q.len()).collect();
             for (j, ch) in label.to_lowercase().chars().take(128).enumerate() {
                 let mut next = vec![j + 1];

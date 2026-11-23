@@ -859,6 +859,8 @@ impl AgentChat {
 
     fn stop_backend(&mut self, wait: bool) {
         self.steering = false;
+        // A discarded backend can no longer finish the retired turn.
+        self.discard_end = false;
         // The next agent starts without this one's memory of the design.
         self.seen = None;
         if let Some(mut b) = self.backend.take() {
@@ -1122,8 +1124,7 @@ enum Outcome {
 
 /// The AI features are on (the master switch in Settings → AI) and this is the desktop app.
 pub fn shown(app: &SolveApp) -> bool {
-    // Not where the host refuses it (`brand::refuse_commands`): no panel, button or key.
-    app.preferences.ai_features && cfg!(not(target_arch = "wasm32")) && crate::brand::refused("ui.assistant").is_none()
+    app.preferences.ai_features && cfg!(not(target_arch = "wasm32"))
 }
 
 /// The Assistant button in the application bar is shown (honours the existing preference).
@@ -1226,10 +1227,6 @@ fn working_dir() -> std::path::PathBuf {
 /// Start the agent: the chat's control endpoint for its MCP bridge if needed, the process.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
-    // No agent starts where the Assistant is not shown (the host refuses it), whoever asks.
-    if !shown(app) {
-        return;
-    }
     disconnect(app);
     let Some(entry) = agents::current(app) else {
         let chat = &mut app.agent_chat;
@@ -1864,7 +1861,7 @@ pub fn send_now(app: &mut SolveApp, ctx: &egui::Context) {
 }
 
 /// New chat: stop what runs (as Stop does), clear the conversation and the queue, and start a
-/// fresh session on the same agent (no restart); the agent and its mode stay, the design's undo
+/// fresh session with the selected agent; the agent and its mode stay, the design's undo
 /// history is untouched.
 pub fn new_chat(app: &mut SolveApp) {
     let running = app.agent_chat.state() == State::Busy;
@@ -1891,7 +1888,7 @@ pub fn new_chat(app: &mut SolveApp) {
     chat.stopped = false;
     chat.ended = None;
     chat.seen = None;
-    chat.discard_end = running;
+    chat.discard_end |= running;
     chat.model_revert = None;
     if matches!(chat.state(), State::Ready | State::Busy) {
         chat.restore_mode = Some(chat.mode.clone()).filter(|m| !m.is_empty());
@@ -2836,10 +2833,6 @@ fn set_config_option_checked(app: &mut SolveApp, id: &str, value: &str, listed_o
 /// `permission` (an option id, or `"cancel"`), `approve` (`true`/`false`, the oldest held
 /// request), `cancel` (Stop), `send_now` (steer: stop, then send the queue), `remove_pending` (index), `undo` (the newest message's changes); returns the panel's state.
 pub fn control(app: &mut SolveApp, ctx: &egui::Context, p: &Value) -> Result<Value, String> {
-    // The host refuses the Assistant: nothing here may turn it on, add an agent or start one.
-    if let Some(refused) = crate::brand::refusal("ui.assistant") {
-        return Err(refused);
-    }
     if let Some(e) = p.get("features").and_then(Value::as_bool) {
         app.preferences.ai_features = e;
     }

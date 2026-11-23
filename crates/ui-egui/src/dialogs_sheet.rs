@@ -767,26 +767,24 @@ fn export_flat(app: &mut SolveApp, body: &str, extension: &str) -> String {
     let body = body.to_string();
     let command = if extension == "csv" { "sheet.export_bend_table" } else { "sheet.export_dxf" };
     app.pick_save(&name, &[extension], move |app, path| {
-        let (message, error) = if let Some(path) = path {
+        let message = if let Some(path) = path {
             match app.run(command, json!({"body": body, "path": path})) {
                 Ok(_) => {
-                    app.set_status(solidcraft_ui_text::format("ui.exported_to", &[("path", &path)]), false);
-                    (solidcraft_ui_text::format("ui.saved_to", &[("path", &path)]), false)
+                    app.set_status(format!("Exported {path}"), false);
+                    format!("Saved {path}")
                 }
-                Err(e) => (crate::friendly_error(command, &e), true),
+                Err(e) => e,
             }
         } else {
-            (solidcraft_ui_text::tr("ui.export_cancelled").to_string(), false)
+            "Export cancelled".into()
         };
-        // As the status line has it: a host that delivers the file says where it went itself.
-        let message = app.shown_status(message, error);
         if let Some(d) = app.dialog.as_mut()
             && let Kind::Sheet(Sm::FlatPattern { status, .. }) = &mut d.kind
         {
-            *status = message;
+            *status = Some(message);
         }
     });
-    solidcraft_ui_text::tr("ui.choose_export_file").to_string()
+    "Choose an export file…".into()
 }
 
 // ---- commands ----
