@@ -404,7 +404,7 @@ pub fn model_xml_parts(objects: &[MeshObject], parts: &[(String, Vec<usize>)], m
     x.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     let ft = if objects.iter().any(MeshObject::tagged) { format!(" xmlns:ft=\"{FACE_TAGS_NS}\"") } else { String::new() };
     let _ = writeln!(x, "<model unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"{CORE_NS}\"{ft}>");
-    x.push_str(" <metadata name=\"Application\">SolidCraft</metadata>\n");
+    let _ = writeln!(x, " <metadata name=\"Application\">{}</metadata>", esc(crate::mesh_producer()));
     for (name, text) in metadata {
         let _ = writeln!(x, " <metadata name=\"{}\">{}</metadata>", esc(name), esc(text));
     }

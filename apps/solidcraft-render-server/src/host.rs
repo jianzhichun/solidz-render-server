@@ -23,6 +23,7 @@ pub const ASSISTANT_REFUSED: &str = "这里不提供助手，请用对话里的�
 /// asks: the user's UI or the model over the control channel.
 pub fn name_product() {
     solidcraft_ui_text::set_product_name(PRODUCT);
+    solidcraft_engine::io::set_mesh_producer(PRODUCT);
     solidcraft_engine::report_issue::refuse(Some(REPORTS_REFUSED));
 }
 

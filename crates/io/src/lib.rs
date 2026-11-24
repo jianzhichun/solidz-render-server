@@ -962,11 +962,23 @@ pub fn mass_properties(b: &solidcraft_kernel::Body) -> Result<Option<MassPropert
     Ok(Mesh { positions, triangles, ..Mesh::default() }.mass_properties())
 }
 
+static MESH_PRODUCER: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// The embedding host can name itself once, before any STL or 3MF is written (including a direct
+/// handoff to a slicer). Not a design setting or a command parameter.
+pub fn set_mesh_producer(name: &'static str) {
+    let _ = MESH_PRODUCER.set(name);
+}
+
+fn mesh_producer() -> &'static str {
+    MESH_PRODUCER.get().copied().unwrap_or("SolidCraft")
+}
+
 /// Binary STL of several meshes (one solid).
 pub fn stl_binary(meshes: &[Mesh], name: &str) -> Vec<u8> {
     let n: usize = meshes.iter().map(|m| m.triangles.len()).sum();
     let mut out = Vec::with_capacity(84 + n * 50);
-    let mut header = format!("SolidCraft STL {name}").into_bytes();
+    let mut header = format!("{} STL {name}", mesh_producer()).into_bytes();
     header.resize(80, b' ');
     out.extend_from_slice(&header);
     out.extend_from_slice(&u32::try_from(n).unwrap_or(u32::MAX).to_le_bytes());

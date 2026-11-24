@@ -146,6 +146,33 @@ const QUERIES: &[&str] = &[
 /// Clicks after which the walk stops (a guard against a UI that keeps growing).
 const MAX_CLICKS: usize = 4000;
 
+/// What a slicer would receive, before any program is started. The model owns its names and face tags.
+#[test]
+fn mesh_writers_name_the_host_but_leave_the_model_alone() {
+    use solidcraft_engine::{geom::Mesh, io};
+    host::name_product();
+    let name = "SolidCraft coupon";
+    let mut mesh = Mesh { positions: vec![Default::default(); 3], triangles: vec![[0, 1, 2]], ..Default::default() };
+    mesh.positions[1].x = 1.0;
+    mesh.positions[2].y = 1.0;
+    let stl = io::stl_binary(std::slice::from_ref(&mesh), name);
+    assert_eq!(std::str::from_utf8(&stl[..80]).unwrap().trim_end(), "SolidZ STL SolidCraft coupon");
+    assert_eq!((stl.len(), u32::from_le_bytes(stl[80..84].try_into().unwrap())), (84 + 50, 1), "one triangle, each 50 bytes");
+    let object = io::MeshObject {
+        name: name.into(),
+        positions: mesh.positions,
+        triangles: mesh.triangles,
+        tri_faces: vec![0],
+        faces: 1,
+        ..Default::default()
+    };
+    let xml = io::model_xml_with(&[object], &[("Title", name)]);
+    assert!(xml.contains("<metadata name=\"Application\">SolidZ</metadata>"));
+    assert!(xml.contains("<metadata name=\"Title\">SolidCraft coupon</metadata>"));
+    assert!(xml.contains("name=\"SolidCraft coupon\""));
+    assert!(xml.contains("ft:face=\"0\""));
+}
+
 #[test]
 fn nothing_shown_leads_to_solidcraft() {
     host::name_product();
