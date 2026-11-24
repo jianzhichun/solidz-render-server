@@ -665,6 +665,10 @@ pub fn crash_draft(report: &serde_json::Value) -> Draft {
 
 /// Open a reviewed draft for a crash report (no screenshot: the view shows nothing of it).
 pub fn begin_crash(app: &mut SolveApp, ctx: &egui::Context, report: &serde_json::Value) {
+    // Under a host product's name no report is drafted here, whatever path asked (`brand`).
+    if !crate::brand::own_report_flow() {
+        return;
+    }
     if keep_open_draft(app, true) {
         return;
     }
@@ -720,6 +724,10 @@ pub fn draft_url(title: &str, body: &str) -> (String, bool) {
 }
 
 pub fn begin(app: &mut SolveApp, ctx: &egui::Context, dialog: Option<&dialogs::Dialog>, error: Option<&str>) {
+    // Under a host product's name no report is drafted here, whatever path asked (`brand`).
+    if !crate::brand::own_report_flow() {
+        return;
+    }
     if keep_open_draft(app, dialog.is_some() || error.is_some()) {
         return;
     }

@@ -390,6 +390,39 @@ fn bend_table_picker_writes_the_current_body() {
     }
 }
 
+/// The flat-pattern panel's own status reads in the interface language, and where the host delivers
+/// the file it chose (`SolveApp::shown_status`), neither the panel nor the status line names that place.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn flat_export_status_is_translated_and_keeps_the_hosts_place_out() {
+    crate::i18n::install();
+    let _zh = solidcraft_ui_text::scope("zh");
+    let mut app = plate(crate::ui_kit::LayoutMode::Docked);
+    app.run("sheet.flange", json!({"sketch": "Base"})).unwrap();
+    let body = app.session.model.state().surface_sheets[0].body.clone();
+    app.start("sheet.flat_pattern");
+    let place = std::env::temp_dir().join(format!("solidcraft-staging-{}", std::process::id())).join("x.dxf");
+    std::fs::create_dir_all(place.parent().unwrap()).unwrap();
+    let (given, hidden) = (place.to_string_lossy().into_owned(), place.to_string_lossy().into_owned());
+    app.shown_status = Some(Box::new(move |text: &str, error: bool| (error || !text.contains(&hidden)).then(|| text.to_string())));
+    let status = |app: &SolveApp| match &app.dialog.as_ref().unwrap().kind {
+        Kind::Sheet(Sm::FlatPattern { status, .. }) => status.clone(),
+        _ => panic!("flat dialog"),
+    };
+    app.services.pick_save = Some(Box::new(|_, _| Box::pin(std::future::ready(None))));
+    assert_eq!(export_flat(&mut app, &body, "dxf"), "选择导出文件…");
+    crate::file_picker::tick(&mut app, &crate::fonts::test_context());
+    assert_eq!(status(&app).as_deref(), Some("已取消导出"));
+    app.services.pick_save = Some(Box::new(move |_, _| Box::pin(std::future::ready(Some(given.clone())))));
+    export_flat(&mut app, &body, "dxf");
+    crate::file_picker::tick(&mut app, &crate::fonts::test_context());
+    assert!(place.is_file(), "the file is written where the host said");
+    assert_eq!(status(&app), None, "the panel names no place");
+    let named = |text: &str| text.contains("solidcraft-staging");
+    assert!(app.status.as_ref().is_none_or(|s| !named(&s.0)) && app.messages.iter().all(|m| !named(&m.text)), "{:?}", app.status);
+    std::fs::remove_dir_all(place.parent().unwrap()).unwrap();
+}
+
 /// The rule manager's shape selector: picked in the dialog, the shape reaches the rule and the part
 /// made with it, and the dialog shows it the next time.
 #[test]
