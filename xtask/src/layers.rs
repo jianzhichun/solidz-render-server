@@ -109,8 +109,6 @@ pub const TABLE: &[(&str, Class)] = &[
     ("web", Class::Exempt),
     // the UI kit's component gallery (docs.solidcraft.io/kit/), desktop and browser
     ("ui-kit-gallery", Class::Exempt),
-    // the editing UI drawn offscreen and streamed to an embedding host (apps/solidcraft-render-server)
-    ("render-server", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 

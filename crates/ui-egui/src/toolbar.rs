@@ -981,14 +981,6 @@ pub(crate) fn export(app: &mut SolveApp, ext: &str) {
 /// does what that File › Export item does: STEP, OBJ and URDF ask where to save, STL and 3MF
 /// open the mesh dialog with the format chosen. `false`: `id` is no such command.
 pub(crate) fn start_export(app: &mut SolveApp, id: &str) -> bool {
-    // Export itself (command search) asks where to save and in which format, as the browser's
-    // Export… does; run as it was, it only said that `path` is required.
-    if id == "file.export" {
-        if FileAction::Export("step").enabled(app) {
-            export_in(app, EXPORT_EXTENSIONS, None);
-        }
-        return true;
-    }
     let (extension, mesh) = match id {
         "file.export_step" => ("step", false),
         "file.export_obj" => ("obj", false),
@@ -1010,38 +1002,61 @@ pub(crate) fn start_export(app: &mut SolveApp, id: &str) -> bool {
     true
 }
 
-/// The extensions `file.export` writes, the first one offered.
-pub(crate) const EXPORT_EXTENSIONS: &[&str] = &["step", "stp", "igs", "stl", "3mf", "obj", "glb", "usd", "usda", "usdc", "usdz"];
+/// `file.export`'s `writer` for a file `name` (a path or a format): cadmpeg's for a STEP or IGES
+/// file while Preferences › General › Export STEP and IGES with cadmpeg is on; else left out, so
+/// SolidCraft's own writer writes it. The command never reads the preference itself.
+pub(crate) fn with_export_writer(app: &SolveApp, name: &str, params: &mut Value) {
+    let step_or_iges =
+        matches!(solidcraft_engine::io::Format::from_name(name), Ok(solidcraft_engine::io::Format::Step | solidcraft_engine::io::Format::Iges));
+    if app.preferences.cadmpeg_export && step_or_iges {
+        params["writer"] = json!("cadmpeg");
+    }
+}
 
 /// Export to a file with extension `ext`, in `format` when the extension alone doesn't name it.
 fn export_as(app: &mut SolveApp, ext: &str, format: Option<&str>) {
-    export_in(app, &[ext], format);
-}
-
-/// Export to a file with one of `exts` (the first offered).
-fn export_in(app: &mut SolveApp, exts: &[&str], format: Option<&str>) {
     let body = crate::export_name::first_body(app);
-    let name = format!("{}.{}", crate::export_name::offered(app, body.as_deref(), &app.session.doc.name), exts[0]);
+    let name = format!("{}.{ext}", crate::export_name::offered(app, body.as_deref(), &app.session.doc.name));
     let format = format.map(str::to_string);
     // OpenUSD: the extension chosen picks binary (`.usd`, `.usdc`), text (`.usda`) or a package
     // (`.usdz`).
-    let exts: &[&str] = if solidcraft_engine::io::is_usd_path(&name) { &solidcraft_engine::io::USD_EXTS } else { exts };
+    let exts: &[&str] = if solidcraft_engine::io::is_usd_path(&name) { &solidcraft_engine::io::USD_EXTS } else { std::slice::from_ref(&ext) };
     app.pick_save(&name, exts, move |app, path| {
         let Some(path) = path else { return };
         let mut params = json!({"path": path});
-        if let Some(format) = format {
+        if let Some(format) = &format {
             params["format"] = json!(format);
         }
+        with_export_writer(app, format.as_deref().unwrap_or(&path), &mut params);
+        // GLB only, and not read for the other formats.
+        params["hierarchy"] = json!(app.preferences.glb_export_hierarchy);
         if let Ok(result) = app.run("file.export", params) {
-            let skipped =
-                result.get("skipped").and_then(Value::as_array).map_or(Vec::new(), |a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>());
-            let mut line = solidcraft_ui_text::format("ui.exported_to", &[("path", &path)]);
-            if !skipped.is_empty() {
-                line.push_str(&format!(" (skipped {})", skipped.join(", ")));
-            }
-            app.set_status(line, false);
+            exported(app, &path, &result);
         }
     });
+}
+
+/// The status line after an export: where the file went, with the bodies the exporter skipped and
+/// the first warning its writer gave. Each warning is kept in Messages, so what the file leaves out
+/// stays readable after the chip fades.
+pub(crate) fn exported(app: &mut SolveApp, path: &str, result: &Value) {
+    let listed = |key: &str| -> Vec<String> {
+        result.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+    };
+    let warnings = listed("warnings");
+    for warning in &warnings {
+        let text = crate::i18n::tr_diagnostic(warning);
+        app.messages.push(&text, false, crate::now_ms());
+    }
+    let mut line = format!("Exported {path}");
+    if let Some(first) = warnings.first() {
+        line.push_str(&format!(" with {} warning(s): {first}", warnings.len()));
+    }
+    let skipped = listed("skipped");
+    if !skipped.is_empty() {
+        line.push_str(&format!(" (skipped {})", skipped.join(", ")));
+    }
+    app.set_status(line, false);
 }
 
 /// Commands opt into persistent presentation; the engine status list remains the only truth.
@@ -1640,18 +1655,8 @@ impl RibbonPanels {
                 Panel {
                     panel,
                     key: format!("{tab}:{panel}"),
-                    label: if finish {
-                        app.tr("ui.ribbon_exit").to_string()
-                    } else if import_export(app, tab, panel) {
-                        app.tr("ui.ribbon_import_export").to_string()
-                    } else {
-                        ribbon_label(app, panel)
-                    },
-                    tip: if import_export(app, tab, panel) {
-                        format!("{} ({})", app.tr("ui.ribbon_import_export"), shown.len().max(cmds.len()))
-                    } else {
-                        format!("{} ({})", app.tr_label(panel), shown.len().max(cmds.len()))
-                    },
+                    label: if finish { app.tr("ui.ribbon_exit").to_string() } else { ribbon_label(app, panel) },
+                    tip: format!("{} ({})", app.tr_label(panel), shown.len().max(cmds.len())),
                     popup_id,
                     commands: cmds.iter().map(|c| c.id).collect(),
                     icon: shown.first().or(cmds.first()).map(|c| c.info(&app.session).icon),
@@ -1819,26 +1824,6 @@ const RIBBON_HANDLES: ribbon::Handles<'static> = ribbon::Handles {
     drag_remove: "toolbar_drag:remove",
 };
 
-/// A host that runs the editor (`embed_editor`) draws no application bar, so no File menu: the
-/// Insert tab's Files panel is where its files come in and go out.
-fn import_export(app: &SolveApp, tab: &str, panel: &str) -> bool {
-    app.embed_editor && tab == "INSERT" && panel == "FILES"
-}
-
-/// Export in that panel ([`import_export`]), after the inserts it shows as buttons and as one of
-/// them: started, it asks where to save in any format `file.export` writes ([`start_export`]).
-/// Returns the panel's button count.
-fn embedded_export(app: &SolveApp, tab: &str, panel: &str, cmds: &mut Vec<&'static solidcraft_engine::CommandSpec>, promote: usize) -> usize {
-    let export = solidcraft_engine::find_command("file.export");
-    match export.filter(|e| import_export(app, tab, panel) && !cmds.iter().any(|c| c.id == e.id)) {
-        Some(export) => {
-            cmds.insert(promote.min(cmds.len()), export);
-            promote + 1
-        }
-        None => promote,
-    }
-}
-
 /// One panel of a tab: its name, every command and the buttons it shows.
 type PanelList = (&'static str, Vec<&'static solidcraft_engine::CommandSpec>, Vec<&'static solidcraft_engine::CommandSpec>);
 
@@ -1948,7 +1933,7 @@ fn ribbon_contents(app: &mut SolveApp, ui: &mut egui::Ui, shape: RibbonShape) ->
         // Every panel with all its buttons (the user's pins have no cap); a toolbar too narrow
         // for them narrows the buttons, then trims panels into their drop-down and the » menu.
         let editing_in_place = app.edit_in_place.active.is_some();
-        let lists: Vec<_> = crate::toolbar_custom::panel_lists(&tab)
+        let lists: Vec<_> = crate::toolbar_custom::panel_lists_for(app, &tab)
             .into_iter()
             .filter(|(panel, _, _)| editing_in_place || !(tab == "MODEL" && *panel == "FINISH EDITING"))
             .map(|(panel, mut cmds, promote)| {
@@ -1957,7 +1942,6 @@ fn ribbon_contents(app: &mut SolveApp, ui: &mut egui::Ui, shape: RibbonShape) ->
                 } else {
                     promote
                 };
-                let promote = embedded_export(app, &tab, panel, &mut cmds, promote);
                 if !app.preferences.sketch_construction_lines {
                     cmds.retain(|c| solidcraft_engine::cmd::construction_line_mode(c.id).is_none());
                 }
@@ -3082,7 +3066,11 @@ fn shortcuts_focused(app: &mut SolveApp, ctx: &egui::Context) {
         if k != Key::Escape {
             app.last_escape = None;
         }
-        if shown && (crate::keymap::drag_zoom_key(app, k, mods) || crate::navigation::view_key(app, ctx, k, mods, repeat)) {
+        if shown
+            && (crate::keymap::drag_zoom_key(app, k, mods)
+                || crate::navigation::toggle_mode_key(app, ctx, k, mods, repeat)
+                || crate::navigation::view_key(app, ctx, k, mods, repeat))
+        {
             continue;
         }
         // Alt+1 to Alt+9 show the shown design's first to ninth view (Ctrl+1 to Ctrl+7 keep
@@ -3180,7 +3168,8 @@ fn shortcuts_focused(app: &mut SolveApp, ctx: &egui::Context) {
                 }
                 // End navigation before the underlying tool or dialog; sketch double-Escape
                 // handling starts with the next press.
-                if app.viewport.nav.take().is_some() {
+                if app.viewport.nav_toggle.take().is_some() | app.viewport.nav.take().is_some() {
+                    app.viewport.nav_toggle_at = None;
                     app.last_escape = None;
                     continue;
                 }
@@ -3549,6 +3538,28 @@ mod header_report_tests {
         crate::keymap::press(&mut h.app, "Alt+Shift+F8", false);
         assert_eq!(h.app.dialog.as_ref().and_then(|d| d.command()), Some("file.save_mesh"), "STL opens Save As Mesh");
         crate::dialogs::cancel(&mut h.app);
+    }
+
+    /// What an exporter leaves out is said on the status line, and each warning stays in Messages
+    /// once the chip has faded; an export with nothing left out still says just where it went.
+    #[test]
+    fn an_export_with_warnings_says_so_and_keeps_them_in_messages() {
+        let mut h = crate::scenario::Harness::new();
+        let result = json!({
+            "path": "part.3dm",
+            "warnings": ["Pin: written as its mesh, without its name or colour", "Loose: written as its mesh"],
+            "skipped": ["Hidden"]
+        });
+        exported(&mut h.app, "part.3dm", &result);
+        let (line, _, error) = h.app.status.clone().expect("a status line");
+        assert_eq!(line, "Exported part.3dm with 2 warning(s): Pin: written as its mesh, without its name or colour (skipped Hidden)");
+        assert!(!error, "a warning, not a failure");
+        let messages: Vec<String> = h.app.messages.iter().map(|m| m.text.clone()).collect();
+        assert!(messages.iter().any(|m| m.contains("Pin: written as its mesh")), "{messages:?}");
+        assert!(messages.iter().any(|m| m.contains("Loose: written as its mesh")), "{messages:?}");
+
+        exported(&mut h.app, "part.step", &json!({"path": "part.step"}));
+        assert_eq!(h.app.status.as_ref().map(|s| s.0.as_str()), Some("Exported part.step"));
     }
 
     /// New designs are saved as `.sc`. A design opened from a `.solidcraft` file is saved back to
@@ -6962,6 +6973,48 @@ mod persistent_ribbon_tests {
     use super::*;
     use crate::scenario::{self, Harness};
 
+    #[test]
+    fn surface_toolbar_switches_layout_without_losing_custom_pins() {
+        let mut h = Harness::new();
+        h.app.home.open = false;
+        h.call("ui.resize", json!({"width":2400,"height":1000}));
+        h.app.ui.tab = "SURFACE".into();
+        h.frames(3);
+        let lists = crate::toolbar_custom::panel_lists_for(&h.app, "SURFACE");
+        assert_eq!(lists.iter().map(|(p, _, _)| *p).collect::<Vec<_>>(), ["SKETCH", "CREATE", "EDIT", "MESH"]);
+        let (_, mesh, count) = lists.iter().find(|(p, _, _)| *p == "MESH").unwrap();
+        assert_eq!(mesh.iter().map(|c| c.id).collect::<Vec<_>>(), ["mesh.reduce", "mesh.convert", "file.insert_mesh", "file.save_mesh"]);
+        assert_eq!(
+            crate::toolbar_custom::buttons(&h.app, "SURFACE", "MESH", mesh, *count).iter().map(|c| c.id).collect::<Vec<_>>(),
+            ["mesh.reduce", "mesh.convert"]
+        );
+        h.step(&json!({"click":{"handle":"panel:SURFACE:CREATE"}})).unwrap();
+        assert!(scenario::handle_at("dropdown:surface.thicken").is_some());
+        h.step(&json!({"click":{"handle":"panel:SURFACE:CREATE"}})).unwrap();
+        assert!(scenario::handle_at("button:mesh.reduce").is_some());
+        assert!(scenario::handle_at("button:mesh.convert").is_some());
+        crate::toolbar_custom::pin(&mut h.app, "SURFACE", "file.insert_mesh").unwrap();
+        h.app.preferences.legacy_surface_toolbar = true;
+        h.frames(3);
+        let lists = crate::toolbar_custom::panel_lists_for(&h.app, "SURFACE");
+        assert_eq!(lists.iter().map(|(p, _, _)| *p).collect::<Vec<_>>(), ["SKETCH", "CREATE", "EDIT", "CONVERT"]);
+        let (_, create, count) = lists.iter().find(|(p, _, _)| *p == "CREATE").unwrap();
+        assert!(!create.iter().any(|c| c.id == "surface.thicken"));
+        assert_eq!(*count, 4);
+        let (_, convert, count) = lists.iter().find(|(p, _, _)| *p == "CONVERT").unwrap();
+        assert_eq!(convert.iter().map(|c| c.id).collect::<Vec<_>>(), ["surface.thicken", "mesh.convert", "mesh.reduce"]);
+        assert_eq!(*count, 2);
+        assert!(scenario::handle_at("button:surface.thicken").is_some());
+        assert!(scenario::handle_at("button:mesh.convert").is_some());
+        assert!(scenario::handle_at("button:mesh.reduce").is_none());
+        assert!(scenario::handle_at("button:file.insert_mesh").is_none(), "Mesh customizations stay hidden in the legacy layout");
+        h.app.preferences.legacy_surface_toolbar = false;
+        h.frames(3);
+        assert!(scenario::handle_at("button:file.insert_mesh").is_some());
+        h.call("ui.prefs", json!({"language":"ja"}));
+        assert_eq!(ribbon_label(&h.app, "MESH"), "メッシュ");
+    }
+
     fn harness() -> Harness {
         let mut h = Harness::new();
         h.app.home.open = false;
@@ -7732,58 +7785,5 @@ mod quick_access_tests {
             "sketch.rectangle.three_point",
             "the ribbon's Rectangle button still starts its remembered choice"
         );
-    }
-}
-
-#[cfg(test)]
-mod embedded_export_tests {
-    use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    /// Every text the last frame painted.
-    fn painted(h: &crate::scenario::Harness) -> Vec<String> {
-        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
-            match shape {
-                egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
-                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
-                _ => {}
-            }
-        }
-        let mut out = Vec::new();
-        h.shapes.iter().for_each(|s| walk(&s.shape, &mut out));
-        out
-    }
-
-    /// A host that runs the editor has no File menu: Insert › Files offers Export after the
-    /// inserts it shows and reads as Import/Export; the button asks where to save, offering every
-    /// format `file.export` writes, and writes there. The desktop's ribbon stays as it was.
-    #[test]
-    fn a_hosted_editor_exports_from_the_files_panel() {
-        let mut h = crate::scenario::Harness::new();
-        h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
-        h.step(&json!({"click": {"handle": "tab:INSERT"}})).unwrap();
-        assert!(crate::scenario::handle_at("toolbar:file.export").is_none(), "the desktop's ribbon has no Export");
-        assert!(!painted(&h).iter().any(|t| t == "Import/Export"));
-        h.app.embed_editor = true;
-        let asked = Rc::new(RefCell::new(Vec::new()));
-        let (dir, log) = (h.dir.clone(), asked.clone());
-        h.app.services.pick_save = Some(Box::new(move |name, exts| {
-            log.borrow_mut().push((name.to_string(), exts.iter().map(|e| e.to_string()).collect::<Vec<_>>()));
-            Box::pin(std::future::ready(Some(dir.join(name).to_string_lossy().into_owned())))
-        }));
-        h.frames(2);
-        assert!(painted(&h).iter().any(|t| t == "Import/Export"), "{:?}", painted(&h));
-        let buttons: Vec<String> = crate::scenario::handles("toolbar:").into_iter().map(|(n, _)| n).collect();
-        let at = |id: &str| buttons.iter().position(|n| n == &format!("toolbar:{id}"));
-        assert!(at("file.insert_mesh") < at("file.export"), "after the inserts: {buttons:?}");
-        h.step(&json!({"click": {"handle": "toolbar:file.export"}})).unwrap();
-        h.frames(3);
-        let asked = asked.borrow();
-        assert_eq!(asked.len(), 1, "one save ask");
-        assert!(asked[0].0.ends_with(".step"), "{asked:?}");
-        assert_eq!(asked[0].1, EXPORT_EXTENSIONS.iter().map(|e| e.to_string()).collect::<Vec<_>>());
-        let written = h.dir.join(&asked[0].0);
-        assert!(std::fs::metadata(&written).is_ok_and(|m| m.len() > 0), "{} written", written.display());
     }
 }

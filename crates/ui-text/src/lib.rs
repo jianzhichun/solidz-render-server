@@ -7,9 +7,6 @@
 //! `en` and is the fallback for a message a translation lacks. With nothing installed (or no `en`
 //! catalog among them) every id reads as itself, the language is `en` and no other language is
 //! supported.
-//!
-//! A host that carries SolidCraft inside another product names it once with [`set_product_name`]:
-//! every message then says that name where it says SolidCraft, in every language.
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -20,40 +17,6 @@ pub mod bidi;
 
 /// A catalog's messages: stable id → text.
 pub type Messages = BTreeMap<String, String>;
-
-/// The product the messages name unless a host names another ([`set_product_name`]).
-pub const PRODUCT_NAME: &str = "SolidCraft";
-
-/// The product a host named, set once before the first message is read.
-static PRODUCT: OnceLock<String> = OnceLock::new();
-
-/// Name the product `name` wherever a message names SolidCraft, in every catalog and in
-/// [`branded`] text. Once per process, before the first message is read (a catalog read earlier
-/// keeps the name it was read with). False when a product was already named.
-pub fn set_product_name(name: &str) -> bool {
-    PRODUCT.set(name.trim().to_string()).is_ok()
-}
-
-/// The product the messages name: SolidCraft, or the one a host named.
-pub fn product_name() -> &'static str {
-    PRODUCT.get().map_or(PRODUCT_NAME, String::as_str)
-}
-
-/// `text` naming the product as the messages do: SolidCraft replaced by the name a host gave,
-/// unchanged otherwise. For text that is not a catalog message (engine errors, copied text).
-pub fn branded(text: &str) -> Cow<'_, str> {
-    match PRODUCT.get() {
-        Some(name) if name != PRODUCT_NAME && text.contains(PRODUCT_NAME) => Cow::Owned(text.replace(PRODUCT_NAME, name)),
-        _ => Cow::Borrowed(text),
-    }
-}
-
-fn parse(catalog: &Catalog) -> Messages {
-    serde_json::from_str(catalog.source).unwrap_or_else(|error| {
-        log::error!("invalid embedded {} message catalog: {error}", catalog.id);
-        Messages::new()
-    })
-}
 
 /// The id of the fallback catalog.
 const ENGLISH_ID: &str = "en";
@@ -66,11 +29,12 @@ pub const SHARED_ENGLISH: &str = include_str!("../locales/en.json");
 pub struct Catalog {
     pub id: &'static str,
     pub name: &'static str,
-    /// The catalog as JSON.
+    /// The catalog as JSON, for one made with [`Catalog::new`]. Empty for a packed one: read
+    /// [`Catalog::json`], which serves both.
     pub source: &'static str,
+    /// The catalog's JSON, deflated (zlib), for one made with [`Catalog::packed`].
+    packed: &'static [u8],
     messages: OnceLock<Messages>,
-    /// The messages as written, when a host named another product ([`set_product_name`]).
-    written: OnceLock<Messages>,
     /// The messages in display order, for a catalog with right-to-left text (see [`bidi`]).
     shown: OnceLock<Option<Messages>>,
     /// English text → the ids with that text, for resolving a source label (see [`Locale::label`]).
@@ -79,27 +43,42 @@ pub struct Catalog {
 
 impl Catalog {
     pub const fn new(id: &'static str, name: &'static str, source: &'static str) -> Self {
-        Self { id, name, source, messages: OnceLock::new(), written: OnceLock::new(), shown: OnceLock::new(), label_ids: OnceLock::new() }
+        Self { id, name, source, packed: &[], messages: OnceLock::new(), shown: OnceLock::new(), label_ids: OnceLock::new() }
     }
 
-    /// The messages in reading order, as the catalog holds them, naming the product a host named
-    /// ([`set_product_name`]). An invalid catalog is logged and reads as empty.
+    /// A catalog embedded compressed: `packed` is its JSON as a zlib stream. It is inflated when
+    /// the catalog is first read, so a program that embeds many languages carries each at about
+    /// a quarter of its size and unpacks only the ones it shows (the chosen one and English).
+    pub const fn packed(id: &'static str, name: &'static str, packed: &'static [u8]) -> Self {
+        Self { id, name, source: "", packed, messages: OnceLock::new(), shown: OnceLock::new(), label_ids: OnceLock::new() }
+    }
+
+    /// The catalog as JSON, inflated if it was packed. A packed catalog that does not inflate to
+    /// text is logged and reads as empty.
+    pub fn json(&self) -> Cow<'static, str> {
+        if self.packed.is_empty() {
+            return Cow::Borrowed(self.source);
+        }
+        let mut json = String::new();
+        match std::io::Read::read_to_string(&mut flate2::read::ZlibDecoder::new(self.packed), &mut json) {
+            Ok(_) => Cow::Owned(json),
+            Err(error) => {
+                log::error!("invalid packed {} message catalog: {error}", self.id);
+                Cow::Borrowed("{}")
+            }
+        }
+    }
+
+    /// The messages in reading order, as the catalog holds them. An invalid catalog is logged and
+    /// reads as empty.
     pub fn messages(&'static self) -> &'static Messages {
-        self.messages.get_or_init(|| {
-            let messages = parse(self);
-            match PRODUCT.get() {
-                Some(name) if name != PRODUCT_NAME => messages.into_iter().map(|(id, text)| (id, branded(&text).into_owned())).collect(),
-                _ => messages,
+        self.messages.get_or_init(|| match serde_json::from_str(&self.json()) {
+            Ok(messages) => messages,
+            Err(error) => {
+                log::error!("invalid embedded {} message catalog: {error}", self.id);
+                Messages::new()
             }
         })
-    }
-
-    /// The messages as written: the source labels in code are SolidCraft's own words.
-    fn written(&'static self) -> &'static Messages {
-        match PRODUCT.get() {
-            Some(name) if name != PRODUCT_NAME => self.written.get_or_init(|| parse(self)),
-            _ => self.messages(),
-        }
     }
 
     /// The messages as egui must be given them: right-to-left lines in display order, since egui
@@ -123,7 +102,7 @@ impl Catalog {
     fn label_ids(&'static self) -> &'static BTreeMap<&'static str, Vec<&'static str>> {
         self.label_ids.get_or_init(|| {
             let mut ids: BTreeMap<_, Vec<_>> = BTreeMap::new();
-            for (id, text) in self.written().iter().filter(|(_, text)| !text.contains('{')) {
+            for (id, text) in self.messages().iter().filter(|(_, text)| !text.contains('{')) {
                 ids.entry(text.as_str()).or_default().push(id.as_str());
             }
             ids
@@ -486,6 +465,34 @@ mod tests {
 
     fn installed() {
         install(LOCALES);
+    }
+
+    fn deflated(json: &str) -> &'static [u8] {
+        let mut packer = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        std::io::Write::write_all(&mut packer, json.as_bytes()).unwrap();
+        Box::leak(packer.finish().unwrap().into_boxed_slice())
+    }
+
+    /// A packed catalog reads as the JSON it was packed from.
+    #[test]
+    fn a_packed_catalog_reads_as_its_json() {
+        let json = r#"{"ui.cancel":"キャンセル","dialog.selected_count":"{count} 件を選択"}"#;
+        let packed: &'static Catalog = Box::leak(Box::new(Catalog::packed("ja", "日本語", deflated(json))));
+        let plain: &'static Catalog = Box::leak(Box::new(Catalog::new("ja", "日本語", json)));
+        assert_eq!(packed.json(), json);
+        assert_eq!(packed.messages(), plain.messages());
+        assert_eq!(packed.messages().get("ui.cancel").map(String::as_str), Some("キャンセル"));
+        assert_eq!(plain.json(), json);
+    }
+
+    /// Bytes that are no zlib stream, or one cut short, read as an empty catalog and never panic.
+    #[test]
+    fn a_broken_packed_catalog_reads_as_empty() {
+        let whole = deflated(r#"{"ui.cancel":"Cancel"}"#);
+        for broken in [&b"not a zlib stream"[..], &whole[..whole.len() / 2], &[0xff; 4]] {
+            let catalog: &'static Catalog = Box::leak(Box::new(Catalog::packed("en", "English", broken)));
+            assert!(catalog.messages().is_empty());
+        }
     }
 
     #[test]

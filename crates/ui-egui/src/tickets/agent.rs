@@ -54,8 +54,7 @@ fn status(id: &str, status: &str, message: &str, extra: Value) {
 
 /// Take the agents' requests and keep their statuses up to date. Called every frame.
 pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
-    // Under a host product's name this app takes no agent's report (`brand`).
-    if app.services.tickets_http.is_none() || !crate::brand::own_report_flow() {
+    if app.services.tickets_http.is_none() {
         return;
     }
     mailbox::attach_host();
