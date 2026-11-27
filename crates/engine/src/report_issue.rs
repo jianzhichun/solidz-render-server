@@ -48,6 +48,23 @@ pub fn host_attached() -> bool {
     HOST.load(Ordering::SeqCst)
 }
 
+/// Why this process files no report at all (a host that embeds SolidCraft takes problem reports
+/// its own way); `None`: reports go to the app as usual.
+static REFUSED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Refuse every report in this process with `reason` (`None`: stop refusing). The command then
+/// refuses before anything is gathered or queued, whatever app is attached.
+pub fn refuse(reason: Option<&str>) {
+    if let Ok(mut r) = REFUSED.lock() {
+        *r = reason.map(str::to_string);
+    }
+}
+
+/// The reason reports are refused here, if they are.
+pub fn refusal() -> Option<String> {
+    REFUSED.lock().ok().and_then(|r| r.clone())
+}
+
 /// Queue a request; its id.
 pub(crate) fn submit(session: u64, params: Value) -> String {
     let id = format!("r{}", NEXT.fetch_add(1, Ordering::SeqCst));

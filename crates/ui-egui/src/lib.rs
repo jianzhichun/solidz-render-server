@@ -17,6 +17,7 @@ pub mod ai_connect;
 pub use solidcraft_ui_kit::app_bar;
 pub use solidcraft_ui_kit::blur;
 pub mod bom_panel;
+pub mod brand;
 pub mod broken_view_preview;
 pub mod browser;
 pub mod browser_canvas;
@@ -44,6 +45,9 @@ pub mod control_job;
 mod control_joint_drive;
 mod control_joint_pose;
 mod control_params;
+// The control server is native only (`solidcraft_control::server`).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod control_protocol;
 pub mod control_switch;
 pub mod crash_ui;
 mod cut_bodies;
@@ -906,6 +910,11 @@ pub struct SolveApp {
     pub status: Option<(String, f64, bool)>,
     /// Interactive tool guidance is presented only where the tool receives input.
     pub(crate) status_is_tool_hint: bool,
+    /// How a status message reads where a host delivers the files its save pickers were answered
+    /// with (an embedding host's staging folder): given the text and whether it is an error, the
+    /// text to show, or `None` to show nothing (the host says where the file went itself). None:
+    /// every message as it is.
+    pub shown_status: Option<Box<dyn Fn(&str, bool) -> Option<String>>>,
     /// The status message offers Undo (a click on it undoes the last step), as after an automatic stand-up.
     pub status_undo: bool,
     /// The status message is a refused JSON save of a design with binary data in it, and offers
@@ -1267,6 +1276,7 @@ impl SolveApp {
             last_escape: None,
             status: None,
             status_is_tool_hint: false,
+            shown_status: None,
             status_undo: false,
             status_save_sc: false,
             status_sticky_at: None,
@@ -1768,6 +1778,10 @@ impl SolveApp {
         // The rules below name registered ids; a command spelled in another case is the same
         // command (the engine runs it), so it meets the same rules.
         let id = solidcraft_engine::find_command(id).map_or(id, |spec| spec.id);
+        // A command the host refuses here (`brand::refuse_commands`), from the control channel too.
+        if let Some(refused) = brand::refusal(id) {
+            return Err(refused);
+        }
         crate::sketch_view::sync(self)?;
         self.sketch_view_named = params.get("view").is_some_and(|view| !view.is_null());
         let finished_sketch = crate::sketch_view::prepare_edit(self, id, &params)?;
@@ -2630,7 +2644,9 @@ impl SolveApp {
             return;
         }
         if id == "ui.assistant" {
-            if agent_chat::shown(self) {
+            if let Some(refused) = brand::refusal(id) {
+                self.set_status(i18n::tr_engine_error(&refused), true);
+            } else if agent_chat::shown(self) {
                 agent_chat::toggle(self);
             }
             return;
@@ -2789,9 +2805,12 @@ impl SolveApp {
         if let Some(info) = solidcraft_engine::find_command(id).map(|c| c.info(&self.session))
             && let Some(why) = info.disabled_reason
         {
-            let label = self.tr_command(id, info.label).to_string();
-            let why = self.tr_label(&why).to_string();
-            self.set_status(format!("{label}: {why}"), true);
+            // a command the host runs for itself is refused in its answer only (brand::quiet_commands)
+            if !brand::quiet(id) {
+                let label = self.tr_command(id, info.label).to_string();
+                let why = self.tr_label(&why).to_string();
+                self.set_status(format!("{label}: {why}"), true);
+            }
             return;
         }
         // The ribbon's Ground acts on the selected placements, or the components picked in the
@@ -3854,7 +3873,8 @@ impl SolveApp {
     }
 
     pub fn set_status(&mut self, s: impl Into<String>, error: bool) {
-        let (text, at) = (i18n::tr_diagnostic(&s.into()), now_ms());
+        let Some(text) = self.shown_status(i18n::tr_diagnostic(&s.into()), error) else { return };
+        let at = now_ms();
         self.messages.push(&text, error, at);
         self.status = Some((text, at, error));
         self.status_is_tool_hint = false;
@@ -3872,6 +3892,14 @@ impl SolveApp {
     pub(crate) fn set_tool_hint(&mut self, text: impl Into<String>) {
         self.set_status(text, false);
         self.status_is_tool_hint = true;
+    }
+
+    /// `text` as the host shows it ([`Self::shown_status`]); `None`: not shown at all.
+    pub(crate) fn shown_status(&self, text: String, error: bool) -> Option<String> {
+        match &self.shown_status {
+            Some(shown) => shown(&text, error),
+            None => Some(text),
+        }
     }
 
     /// Tell the user when a newer SolidCraft saved the design or one of its drawings.

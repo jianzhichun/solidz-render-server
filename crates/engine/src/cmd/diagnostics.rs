@@ -242,6 +242,10 @@ fn profile(_: &mut Session, p: &Value) -> Result<Value> {
 
 fn report_issue(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "diagnostics.report_issue";
+    // A host that takes problem reports its own way: nothing is gathered, queued or sent.
+    if let Some(why) = crate::report_issue::refusal() {
+        return Err(EngineError::Disabled(cmd.to_string(), why));
+    }
     let title = str_(p, "title").map(str::trim).unwrap_or_default();
     if title.is_empty() {
         return Err(bad(cmd, "`title` is required: a short title for the problem"));

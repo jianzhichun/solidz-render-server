@@ -61,7 +61,8 @@ pub fn body_is_cut(app: &SolveApp, name: &str) -> bool {
 
 /// Leave text for the system clipboard: this app's next frame writes it ([`flush`]).
 pub(crate) fn leave_text(app: &mut SolveApp, text: String) {
-    app.clipboard_text = Some(text);
+    // "SolidCraft bodies: …" names the product a host named (`solidcraft_ui_text::branded`).
+    app.clipboard_text = Some(solidcraft_ui_text::branded(&text).into_owned());
 }
 
 /// The selected sketch geometry of the active sketch.

@@ -167,9 +167,18 @@ pub fn with_cjk_fallback(fonts: egui::FontDefinitions, bytes: Vec<u8>) -> Option
 
 /// `fonts` with `bytes` appended under `name` as the last fallback of every interface
 /// family. `None` when the bytes are not a font.
-fn with_fallback(mut fonts: egui::FontDefinitions, name: &str, bytes: Vec<u8>) -> Option<egui::FontDefinitions> {
-    ttf_parser::Face::parse(&bytes, 0).ok()?;
-    fonts.font_data.insert(name.to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
+fn with_fallback(fonts: egui::FontDefinitions, name: &str, bytes: Vec<u8>) -> Option<egui::FontDefinitions> {
+    with_shared_fallback(fonts, name, Arc::new(bytes))
+}
+
+/// [`with_fallback`] with bytes already shared: every installation uses that one copy.
+fn with_shared_fallback(mut fonts: egui::FontDefinitions, name: &str, bytes: egui::epaint::text::Blob) -> Option<egui::FontDefinitions> {
+    let centring = ttf_parser::Face::parse((*bytes).as_ref(), 0).ok().map(|face| line_gap_centring(&face))?;
+    let mut data = egui::FontData::from_blob(bytes, 0);
+    if [CJK_FALLBACK, CHINESE_FALLBACK, HANGUL_FALLBACK].contains(&name) {
+        data.tweak.y_offset_factor = centring;
+    }
+    fonts.font_data.insert(name.to_owned(), Arc::new(data));
     for family in all_families() {
         let list = fonts.families.entry(family).or_default();
         list.retain(|entry| entry != name);
@@ -200,6 +209,23 @@ fn georgian_before_symbols(mut fonts: egui::FontDefinitions, language: &str) -> 
         }
     }
     fonts
+}
+
+/// The [`egui::FontTweak::y_offset_factor`] that draws a face's glyphs in the middle of the line
+/// it lays out: egui puts a face's line gap below its glyphs, so a CJK face with a gap (macOS's
+/// Hiragino Sans GB: half an em) drew Chinese a quarter of a line high, as primary face or as
+/// fallback. Half the gap, in ems; zero for a face without one (Noto Sans CJK, Microsoft YaHei).
+/// The gap is the one egui's metrics (skrifa) read, FreeType's choice: OS/2's when the font asks
+/// for its typographic metrics or has no hhea ascender and descender, else hhea's.
+fn line_gap_centring(face: &ttf_parser::Face) -> f32 {
+    let tables = face.tables();
+    let hhea = tables.hhea;
+    let typo = tables.os2.filter(|os2| {
+        os2.use_typographic_metrics()
+            || (hhea.ascender == 0 && hhea.descender == 0 && (os2.typographic_ascender() != 0 || os2.typographic_descender() != 0))
+    });
+    let gap = typo.map_or(hhea.line_gap, |os2| os2.typographic_line_gap());
+    f32::from(gap) / f32::from(face.units_per_em()) / 2.0
 }
 
 /// Use one primary CJK face for mixed-script labels in every sans weight family.
@@ -501,17 +527,18 @@ pub fn setup_fonts_for(ctx: &egui::Context, language: &str, ui_font: &str) {
 
 /// The system fallback faces, searched for once and kept: reading them takes long on a system
 /// with large CJK fonts, so the app starts that search on a thread and draws its first frame
-/// with the bundled faces (see [`load_system_fonts_in_background`]).
+/// with the bundled faces (see [`load_system_fonts_in_background`]). Shared with the installed
+/// fonts, not copied into them: these files can be tens of megabytes each.
 #[cfg(not(target_arch = "wasm32"))]
 struct SystemFonts {
-    cjk: Option<Vec<u8>>,
-    chinese: Option<Vec<u8>>,
-    hangul: Option<Vec<u8>>,
-    thai: Option<Vec<u8>>,
-    hebrew: Option<Vec<u8>>,
-    arabic: Option<Vec<u8>>,
-    georgian: Option<Vec<u8>>,
-    lao: Option<Vec<u8>>,
+    cjk: Option<egui::epaint::text::Blob>,
+    chinese: Option<egui::epaint::text::Blob>,
+    hangul: Option<egui::epaint::text::Blob>,
+    thai: Option<egui::epaint::text::Blob>,
+    hebrew: Option<egui::epaint::text::Blob>,
+    arabic: Option<egui::epaint::text::Blob>,
+    georgian: Option<egui::epaint::text::Blob>,
+    lao: Option<egui::epaint::text::Blob>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -530,7 +557,17 @@ fn system_fallbacks() -> &'static SystemFonts {
         let arabic = arabic_font();
         let georgian = fallback::candidate_files(fallback::GEORGIAN)
             .find_map(|path| try_read_font(std::path::Path::new(path)).filter(|bytes| covers(bytes, 'ა')));
-        SystemFonts { cjk, chinese, hangul, thai, hebrew, arabic, georgian, lao }
+        let shared = |bytes: Option<Vec<u8>>| bytes.map(|b| -> egui::epaint::text::Blob { Arc::new(b) });
+        SystemFonts {
+            cjk: shared(cjk),
+            chinese: shared(chinese),
+            hangul: shared(hangul),
+            thai: shared(thai),
+            hebrew: shared(hebrew),
+            arabic: shared(arabic),
+            georgian: shared(georgian),
+            lao: shared(lao),
+        }
     })
 }
 
@@ -611,7 +648,7 @@ fn install_fonts(ctx: &egui::Context, language: &str, ui_font: &str, system: Opt
             _ => lao.clone(),
         };
         if let Some(bytes) = bytes
-            && let Some(with_fallback) = with_fallback(fonts.clone(), name, bytes)
+            && let Some(with_fallback) = with_shared_fallback(fonts.clone(), name, bytes)
         {
             fonts = with_fallback;
         }
@@ -1122,8 +1159,8 @@ mod tests {
     /// for Hangul draws Hangul. A machine without one finds none, which says nothing.
     #[test]
     fn the_system_search_finds_each_script_in_its_own_list() {
-        let has = |bytes: &Vec<u8>, text: &str| {
-            let face = ttf_parser::Face::parse(bytes, 0).unwrap();
+        let has = |bytes: &egui::epaint::text::Blob, text: &str| {
+            let face = ttf_parser::Face::parse((**bytes).as_ref(), 0).unwrap();
             text.chars().all(|c| face.glyph_index(c).is_some())
         };
         let found = system_fallbacks();
@@ -1287,6 +1324,75 @@ mod tests {
         for family in sans_families() {
             assert_eq!(fonts.families[&family][0], UI_FONT);
             assert_eq!(fonts.families[&family][1], CJK_FALLBACK);
+        }
+    }
+
+    /// `bytes` with hhea's ascender, descender and line gap set to `metrics`, in font units.
+    fn with_hhea(mut bytes: Vec<u8>, metrics: [i16; 3]) -> Vec<u8> {
+        let tables = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+        let record = (0..tables).map(|i| 12 + 16 * i).find(|&at| &bytes[at..at + 4] == b"hhea").unwrap();
+        let at = u32::from_be_bytes(bytes[record + 8..record + 12].try_into().unwrap()) as usize + 4;
+        for (i, value) in metrics.into_iter().enumerate() {
+            bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        bytes
+    }
+
+    /// The bundled Simplified Chinese subset with the vertical metrics of macOS's Hiragino Sans GB:
+    /// ascender 880, descender −120 and a line gap of half an em.
+    fn chinese_face_with_a_line_gap() -> Vec<u8> {
+        let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/craft-ui-sc/CraftUI-SC.otf"));
+        with_hhea(bytes.to_vec(), [880, -120, 500])
+    }
+
+    #[test]
+    fn a_face_is_moved_down_by_half_the_line_gap_egui_reads() {
+        let centring = |bytes: &[u8]| line_gap_centring(&ttf_parser::Face::parse(bytes, 0).unwrap());
+        assert_eq!(centring(&chinese_face_with_a_line_gap()), 0.25);
+        let noto_metrics = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/craft-ui-sc/CraftUI-SC.otf"));
+        assert_eq!(centring(noto_metrics), 0.0, "no gap, no tweak");
+        // hhea's gap (67), not OS/2's (307): the font doesn't ask for its typographic metrics.
+        let liberation = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../sketch/assets/fonts/liberation-sans/LiberationSans-Regular.ttf"));
+        assert_eq!(centring(liberation), 67.0 / 2048.0 / 2.0);
+        // Plex asks for them: OS/2's gap (0) counts, not hhea's.
+        assert_eq!(centring(&with_hhea(look::PLEX_SANS.to_vec(), [1025, -275, 500])), 0.0);
+    }
+
+    /// A Chinese UI on a Mac without PingFang leads with Hiragino Sans GB, and egui laid out its
+    /// half-em line gap below the glyphs: every label sat a quarter of a line high. An ideograph of
+    /// a face with that gap sits in the middle of its row, leading a Chinese UI or behind Plex.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn chinese_with_a_line_gap_sits_in_the_middle_of_its_row() {
+        let size = 40.0;
+        let installs: [(&str, fn(&egui::Context, Vec<u8>, &str)); 2] = [
+            ("desktop", |ctx, bytes, language| {
+                let system = SystemFonts {
+                    cjk: None,
+                    chinese: Some(Arc::new(bytes)),
+                    hangul: None,
+                    thai: None,
+                    hebrew: None,
+                    arabic: None,
+                    georgian: None,
+                    lao: None,
+                };
+                install_fonts(ctx, language, "", Some(&system));
+            }),
+            ("web", |ctx, bytes, language| assert!(install_web_script_fonts(ctx, None, Some(bytes), None, language))),
+        ];
+        for (path, install) in installs {
+            for language in ["zh", "en"] {
+                let ctx = egui::Context::default();
+                install(&ctx, chinese_face_with_a_line_gap(), language);
+                ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+                let galley = ctx.fonts_mut(|f| f.layout_no_wrap("模".into(), FontId::proportional(size), egui::Color32::WHITE));
+                let row = &galley.rows[0].row;
+                let glyph = &row.glyphs[0];
+                let ink_middle = glyph.pos.y + glyph.uv_rect.offset.y + glyph.uv_rect.size.y / 2.0;
+                let high = (row.size.y / 2.0 - ink_middle) / size;
+                assert!(high.abs() < 0.05, "{path} {language}: 模 sits {high} em above the middle of its row");
+            }
         }
     }
 

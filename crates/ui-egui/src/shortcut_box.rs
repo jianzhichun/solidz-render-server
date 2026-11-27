@@ -232,7 +232,7 @@ pub fn search(app: &SolveApp, q: &str) -> Vec<Row> {
     };
     let mut v: Vec<(u32, Row)> = command_specs()
         .into_iter()
-        .filter(|c| !crate::workspace::AGENT_ONLY.contains(&c.id))
+        .filter(|c| !crate::workspace::AGENT_ONLY.contains(&c.id) && !crate::brand::hides_command(c.id))
         .filter(|c| available_in_workspace(app, c.id))
         // An exact id finds every command, as the box's hint for typing values says (#9734).
         .filter(|c| c.id == q || !hidden.contains(c.id))
@@ -413,6 +413,7 @@ fn closest(query: &str) -> Option<&'static str> {
     let q: Vec<_> = query.trim().to_lowercase().chars().take(128).collect();
     command_specs()
         .into_iter()
+        .filter(|c| !crate::brand::hides_command(c.id))
         .map(|c| {
             let label = solidcraft_ui_text::tr_command(c.id, c.label);
             let mut prev: Vec<_> = (0..=q.len()).collect();

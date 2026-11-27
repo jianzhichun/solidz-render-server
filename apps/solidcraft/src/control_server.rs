@@ -1,17 +1,16 @@
 //! SolidCraft's control channel: the loopback listeners (the app's port and the agent chat's own
 //! endpoint) with their token files, served by the shared control server (`solidcraft_control`)
-//! with what SolidCraft's requests mean ([`SolidCraft`]).
+//! with what SolidCraft's requests mean ([`AppProtocol`], shared with every host of the UI).
 
 use std::net::TcpListener;
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, OnceLock};
 
-use serde_json::{Value, json};
-use solidcraft_control::server::{self, Hub, Protocol, Summary};
+use solidcraft_control::server::{self, Hub};
 use solidcraft_control::{ControlRequest, auth};
 use solidcraft_engine::MAX_LINE;
 use solidcraft_engine::control_auth::APP;
-use solidcraft_engine::control_pending;
+use solidcraft_ui_egui::control_protocol::AppProtocol;
 use solidcraft_ui_egui::control_switch;
 
 /// Wakes the app's event loop for a control request: eframe runs the app's logic pass for it at
@@ -48,71 +47,12 @@ impl Wake {
 /// token in each, removed when the app ends unless another launch has written the file since.
 static TOKEN_FILES: std::sync::Mutex<Vec<(std::path::PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
 
-/// What SolidCraft's requests mean to the control server: commands by their ids, batches and
-/// scripts by their steps, and which ones read, write a file or change the design.
-struct SolidCraft;
-
-impl Protocol for SolidCraft {
-    fn summary(&self, method: &str, p: &Value) -> Summary {
-        let command = match method {
-            "engine.execute" | "command" => p.get("command").and_then(Value::as_str).and_then(solidcraft_engine::find_command).map(|c| c.id),
-            _ => None,
-        };
-        let steps = match method {
-            "engine.batch" | "engine.script" => p.get("commands").and_then(Value::as_array).map(Vec::len),
-            _ => None,
-        };
-        Summary {
-            what: control_pending::describe(method, p),
-            effect: control_pending::effect(method, p),
-            command,
-            steps,
-            long: method == "engine.batch",
-        }
-    }
-
-    fn document(&self) -> &'static str {
-        "design"
-    }
-
-    fn change_event(&self) -> &'static str {
-        "design.changed"
-    }
-
-    fn revision_method(&self) -> &'static str {
-        "document.revision"
-    }
-
-    fn docs(&self) -> &'static str {
-        "docs/control-protocol.md"
-    }
-
-    fn stop_on_disconnect(&self, method: &str) -> bool {
-        method == "control.joint_drive"
-    }
-
-    /// A plugin package job holds `plugin.install` and `plugin.remove` for every connection.
-    fn background(&self) -> Vec<Value> {
-        solidcraft_ui_egui::plugin_install::running_jobs()
-    }
-
-    /// Advertise parameter checks, installed plugin tools and interactive desktop joint drive.
-    fn capabilities(&self) -> Value {
-        json!({
-            "param_check": solidcraft_engine::schema::ParamCheck::ALL.map(|l| l.name()),
-            "plugin_tools": true,
-            "joint_drive": true,
-            "joint_pose": true,
-        })
-    }
-}
-
 /// The app's control server, for both of its listeners, so `control.running` sees every request.
 fn hub(ctx: egui::Context, wake: Wake) -> Arc<Hub> {
     static HUB: OnceLock<Arc<Hub>> = OnceLock::new();
     Arc::clone(HUB.get_or_init(|| {
         Arc::new(Hub::new(
-            SolidCraft,
+            AppProtocol,
             move || {
                 ctx.request_repaint();
                 wake.run_logic_now();
@@ -257,6 +197,7 @@ fn listen_on_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{Value, json};
 
     /// #743: the wake's proxy arrives when the event loop starts. Clones share the launch's
     /// holder, and a wake without a proxy yet (the loop not started) is a no-op, not an error.
@@ -270,6 +211,7 @@ mod tests {
     }
 
     use solidcraft_control::server::Waits;
+    use solidcraft_engine::control_pending;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
     use std::sync::atomic::Ordering;
@@ -297,7 +239,7 @@ mod tests {
             }
         });
         let waits = Waits { short: Duration::from_millis(100), long: Duration::from_secs(60), token: Waits::default().token };
-        let hub = Arc::new(Hub::new(SolidCraft, || {}, MAX_LINE).with_waits(waits));
+        let hub = Arc::new(Hub::new(AppProtocol, || {}, MAX_LINE).with_waits(waits));
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let (tx, hub) = (tx.clone(), Arc::clone(&hub));
