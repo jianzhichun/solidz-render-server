@@ -54,8 +54,7 @@ fn status(id: &str, status: &str, message: &str, extra: Value) {
 
 /// Take the agents' requests and keep their statuses up to date. Called every frame.
 pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
-    // Under a host product's name this app takes no agent's report (`brand`).
-    if app.services.tickets_http.is_none() || !crate::brand::own_report_flow() {
+    if app.services.tickets_http.is_none() {
         return;
     }
     mailbox::attach_host();
@@ -75,6 +74,10 @@ fn failure(app: &SolveApp) -> Option<String> {
 
 fn start(app: &mut SolveApp, ctx: &egui::Context, r: &Request) {
     let ask = ask_of(r);
+    if !app.policy.allows("problem_reports") {
+        status(&ask.id, "failed", "The organization's policy turns problem reports off on this computer: nothing was sent.", json!({}));
+        return;
+    }
     let title: String = r.params.get("title").and_then(Value::as_str).unwrap_or_default().trim().chars().take(payload::MAX_TITLE).collect();
     let description: String =
         r.params.get("description").and_then(Value::as_str).unwrap_or_default().chars().take(payload::MAX_DESCRIPTION).collect();

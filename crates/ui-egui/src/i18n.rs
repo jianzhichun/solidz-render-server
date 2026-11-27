@@ -27,6 +27,7 @@ static ITALIAN: Catalog = Catalog::packed("it", "Italiano", include_bytes!(conca
 static JAPANESE: Catalog = Catalog::packed("ja", "日本語", include_bytes!(concat!(env!("OUT_DIR"), "/locales/ja.json.z")));
 static GEORGIAN: Catalog = Catalog::packed("ka", "ქართული", include_bytes!(concat!(env!("OUT_DIR"), "/locales/ka.json.z")));
 static KOREAN: Catalog = Catalog::packed("ko", "한국어", include_bytes!(concat!(env!("OUT_DIR"), "/locales/ko.json.z")));
+static LAO: Catalog = Catalog::packed("lo", "ພາສາລາວ", include_bytes!(concat!(env!("OUT_DIR"), "/locales/lo.json.z")));
 static LATVIAN: Catalog = Catalog::packed("lv", "Latviešu", include_bytes!(concat!(env!("OUT_DIR"), "/locales/lv.json.z")));
 static MALAY: Catalog = Catalog::packed("ms", "Bahasa Melayu", include_bytes!(concat!(env!("OUT_DIR"), "/locales/ms.json.z")));
 static NORWEGIAN: Catalog = Catalog::packed("nb", "Norsk bokmål", include_bytes!(concat!(env!("OUT_DIR"), "/locales/nb.json.z")));
@@ -37,6 +38,8 @@ static PORTUGUESE_PT: Catalog = Catalog::packed("pt-PT", "Português (Portugal)"
 static ROMANIAN: Catalog = Catalog::packed("ro", "Română", include_bytes!(concat!(env!("OUT_DIR"), "/locales/ro.json.z")));
 static RUSSIAN: Catalog = Catalog::packed("ru", "Русский", include_bytes!(concat!(env!("OUT_DIR"), "/locales/ru.json.z")));
 static SERBIAN: Catalog = Catalog::packed("sr", "Српски", include_bytes!(concat!(env!("OUT_DIR"), "/locales/sr.json.z")));
+/// Serbian in Latin script: the Cyrillic catalog transliterated at build time (`build.rs`).
+static SERBIAN_LATIN: Catalog = Catalog::packed("sr-Latn", "Srpski (latinica)", include_bytes!(concat!(env!("OUT_DIR"), "/locales/sr-Latn.json.z")));
 static SWEDISH: Catalog = Catalog::packed("sv", "Svenska", include_bytes!(concat!(env!("OUT_DIR"), "/locales/sv.json.z")));
 static TURKISH: Catalog = Catalog::packed("tr", "Türkçe", include_bytes!(concat!(env!("OUT_DIR"), "/locales/tr.json.z")));
 static UKRAINIAN: Catalog = Catalog::packed("uk", "Українська", include_bytes!(concat!(env!("OUT_DIR"), "/locales/uk.json.z")));
@@ -69,6 +72,7 @@ pub const LOCALES: &[&Catalog] = &[
     &JAPANESE,
     &GEORGIAN,
     &KOREAN,
+    &LAO,
     &LATVIAN,
     &MALAY,
     &NORWEGIAN,
@@ -79,6 +83,7 @@ pub const LOCALES: &[&Catalog] = &[
     &ROMANIAN,
     &RUSSIAN,
     &SERBIAN,
+    &SERBIAN_LATIN,
     &SWEDISH,
     &TURKISH,
     &UKRAINIAN,
@@ -218,8 +223,7 @@ pub fn tr_name(text: &str) -> String {
     solidcraft_ui_text::locale().given_name(text)
 }
 pub fn tr_diagnostic(text: &str) -> String {
-    // The engine's messages name the product as the catalogs do (`solidcraft_ui_text::branded`).
-    solidcraft_ui_text::branded(&solidcraft_ui_text::locale().diagnostic(text)).into_owned()
+    solidcraft_ui_text::locale().diagnostic(text)
 }
 
 /// The id of an offset curve an engine error names at the start, `` `{id}` ``.
@@ -307,25 +311,7 @@ pub fn tr_engine_error(error: &str) -> String {
     if let Some(id) = point_error_id(text, "fixed") {
         return format("sketch.error.point_is_fixed", &[("id", id)]);
     }
-    if let Some((command, reason)) = not_available(text) {
-        return format("command.error.not_available", &[("command", &command), ("reason", solidcraft_ui_text::tr_label(reason))]);
-    }
-    if let Some(name) = text.strip_prefix('`').and_then(|rest| rest.strip_suffix("` is required")).filter(|name| !name.contains('`')) {
-        return format("command.error.required", &[("name", name)]);
-    }
     error.to_string()
-}
-
-/// A command refused in this context (`EngineError::Disabled`): "`{id}` is not available right
-/// now: {reason}", or with the command's label in place of `` `{id}` `` (as [`crate::friendly_error`]
-/// has it). → the command's label in the interface language, and the reason.
-fn not_available(text: &str) -> Option<(String, &str)> {
-    let (subject, reason) = text.split_once(" is not available right now: ")?;
-    let command = match subject.strip_prefix('`').and_then(|rest| rest.strip_suffix('`')) {
-        Some(id) => solidcraft_ui_text::tr_label(crate::command_label(id)).to_string(),
-        None => subject.to_string(),
-    };
-    Some((command, reason))
 }
 
 /// Interface direction follows the selected catalog, including English fallback.
@@ -439,19 +425,6 @@ mod tests {
         assert_eq!(super::tr_engine_error("another error"), "another error");
     }
 
-    /// A command refused in this context, and a parameter left out, read in the interface
-    /// language: the command by its label, the reason the engine gave as it was given.
-    #[test]
-    fn a_refused_command_and_a_missing_parameter_are_translated() {
-        install();
-        let _scope = scope("zh");
-        let label = tr_label(crate::command_label("solid.box")).to_string();
-        assert_eq!(super::tr_engine_error("`solid.box` is not available right now: 试用已结束"), format!("{label}当前不可用：试用已结束"));
-        assert_eq!(super::tr_engine_error(&format!("{label} is not available right now: 试用已结束")), format!("{label}当前不可用：试用已结束"));
-        assert_eq!(super::tr_engine_error("invalid parameters for `file.export`: `path` is required"), "缺少 `path`");
-        assert_eq!(super::tr_engine_error("`a` or `b` is required"), "`a` or `b` is required", "only one parameter is named");
-    }
-
     #[test]
     fn a_later_sketch_source_is_translated_without_truncating_its_name() {
         install();
@@ -507,7 +480,11 @@ mod tests {
             assert_eq!(match_system_tags(&tags(&[tag])), want, "{tag}");
         }
         // Other languages keep the exact tag, then the base language.
-        assert_eq!(match_system_tags(&tags(&["sr-Latn-RS"])), "sr");
+        // Serbian in Latin script is only used when chosen by hand: every Serbian system tag,
+        // with or without a script, keeps Cyrillic, as before sr-Latn existed.
+        for tag in ["sr-Latn-RS", "sr_Latn", "sr-Latn", "sr-Cyrl-RS", "sr-RS"] {
+            assert_eq!(match_system_tags(&tags(&[tag])), "sr", "{tag}");
+        }
         assert_eq!(match_system_tags(&tags(&["zhx-TW", "de"])), "de", "only zh itself is Chinese");
     }
 
@@ -1704,6 +1681,22 @@ mod tests {
         assert_eq!(vi.dynamic("Sketch of bracket"), "Sketch of bracket");
     }
 
+    /// Serbian in Latin script is built from the Cyrillic catalog, so it has every message the
+    /// Cyrillic one has, in Latin letters only, with Lj, Nj and Dž in capitals inside capitals.
+    #[test]
+    fn serbian_latin_is_the_cyrillic_catalog_transliterated() {
+        install();
+        let cyrillic: Messages = serde_json::from_str(&SERBIAN.json()).unwrap();
+        let latin: Messages = serde_json::from_str(&SERBIAN_LATIN.json()).unwrap();
+        assert_eq!(cyrillic.keys().collect::<Vec<_>>(), latin.keys().collect::<Vec<_>>());
+        let cyrillic_left: Vec<&String> = latin.values().filter(|text| text.chars().any(|c| ('\u{400}'..='\u{4ff}').contains(&c))).collect();
+        assert!(cyrillic_left.is_empty(), "Cyrillic left in sr-Latn: {cyrillic_left:?}");
+        let sr = Locale::for_language("sr-Latn");
+        assert_eq!(sr.text("ui.shell"), "Ljuska");
+        assert_eq!(sr.text("ui.heading_shell"), "LJUSKA");
+        assert_eq!(sr.text("ui.tab_manage"), "Upravljanje");
+    }
+
     #[test]
     fn new_languages_translate_keys_labels_and_default_names() {
         install();
@@ -1711,6 +1704,7 @@ mod tests {
             ("bs", "Bosanski", "Postavke", "Ekstrudiraj", "Skica1", "Sačuvati promjene u My {design}?"),
             ("hr", "Hrvatski", "Postavke", "Ekstrudiraj", "Skica1", "Spremiti promjene u My {design}?"),
             ("sr", "Српски", "Подешавања", "Екструдирај", "Скица1", "Сачувати промене у My {design}?"),
+            ("sr-Latn", "Srpski (latinica)", "Podešavanja", "Ekstrudiraj", "Skica1", "Sačuvati promene u My {design}?"),
             ("ka", "ქართული", "პარამეტრები", "ამოწევა", "ესკიზი1", "შევინახოთ ცვლილებები My {design}-ში?"),
             ("lv", "Latviešu", "Iestatījumi", "Izspiešana", "Skice1", "Saglabāt izmaiņas failā My {design}?"),
             ("hu", "Magyar", "Beállítások", "Kihúzás", "Vázlat1", "Menti a(z) My {design} módosításait?"),
@@ -1718,7 +1712,7 @@ mod tests {
             ("nl", "Nederlands", "Voorkeuren", "Extruderen", "Schets1", "Wijzigingen in My {design} opslaan?"),
             ("ro", "Română", "Preferințe", "Extrudare", "Schița1", "Salvați modificările în My {design}?"),
             ("sv", "Svenska", "Inställningar", "Extrudera", "Skiss1", "Spara ändringar i My {design}?"),
-            ("zh-TW", "繁體中文", "首選項", "拉伸", "草圖1", "儲存對 My {design} 的更改？"),
+            ("zh-TW", "繁體中文", "偏好設置", "拉伸", "草圖1", "儲存對 My {design} 的更改？"),
         ] {
             let locale = Locale::for_language(id);
             assert_eq!(locale.name(), name);
@@ -1813,6 +1807,7 @@ mod tests {
         KitCall { name: "wide_primary_button", args: &[1], id: false, trim: &[] },
         KitCall { name: "action_menu", args: &[1], id: false, trim: &[] },
         KitCall { name: "compact_button", args: &[2], id: false, trim: &[] },
+        KitCall { name: "compact_toggle", args: &[2], id: false, trim: &[] },
         KitCall { name: "icon_label_button", args: &[1], id: false, trim: &[] },
         KitCall { name: "command_menu_button", args: &[2], id: false, trim: &[] },
         // choice.rs
@@ -2470,7 +2465,7 @@ mod tests {
         "use crate::ui_kit::{row, status_line, expr_row, hint_row, text_row, choice_row, section, section_count, ",
         "multiline_text_field, dropdown, cell_editor, bounded_cell_editor, search_field, menu_filter, placement_field, ",
         "library_cell, icon_button_at, icon_button_colored, footer, button, primary_button, ",
-        "wide_primary_button, action_menu, compact_button, icon_label_button, command_menu_button, ",
+        "wide_primary_button, action_menu, compact_button, compact_toggle, icon_label_button, command_menu_button, ",
         "checkbox_grid, options, checkbox_row, action_row, toggle_icon, removable_header, bin_button, ",
         "Column, Menu, MenuItem, CommandSearch};"
     );
@@ -2518,6 +2513,7 @@ mod tests {
             ("wide_primary_button(ui, \"wide_primary_button\")", &["wide_primary_button"]),
             ("action_menu(ui, \"action_menu\", |ui| {})", &["action_menu"]),
             ("compact_button(ui, glyph, \"compact_button\", true, false)", &["compact_button"]),
+            ("compact_toggle(ui, glyph, \"compact_toggle\", true, false)", &["compact_toggle"]),
             ("icon_label_button(ui, \"icon_label_button\", icon, true, false)", &["icon_label_button"]),
             ("command_menu_button(ui, id, \"command_menu_button\", icon, shortcut, true)", &["command_menu_button"]),
             ("checkbox_grid(ui, &mut [(\"checkbox_grid\", value)], 1)", &["checkbox_grid"]),
@@ -2843,5 +2839,13 @@ mod tests {
         assert_eq!(literals("use crate :: i18n :: tr;\nfn live() { tr(\"Preferences\"); }"), id);
         assert_eq!(literals("use crate::i18n::{format, tr};\nfn live() { tr(\"Preferences\"); }"), id);
         assert_eq!(literals("fn live() { let tr = crate::i18n::tr; tr(\"Preferences\"); }"), id);
+    }
+
+    #[test]
+    fn lao_catalog_is_registered_and_translates_keys() {
+        install();
+        let lo = Locale::for_language("lo");
+        assert_eq!(lo.name(), "ພາສາລາວ");
+        assert!(is_supported("lo"));
     }
 }
