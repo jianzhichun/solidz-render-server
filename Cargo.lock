@@ -6556,7 +6556,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-render-server"
-version = "0.48.1"
+version = "0.50.0"
 dependencies = [
  "arboard",
  "egui",
